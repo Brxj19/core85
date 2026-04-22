@@ -112,6 +112,36 @@ private:
         uint8_t rstOpcode = 0U;
     };
 
+    uint8_t readRegisterOrMemory(uint8_t code) const noexcept;
+    void writeRegisterOrMemory(uint8_t code, uint8_t value) noexcept;
+
+    uint16_t readWord(uint16_t address) const noexcept;
+    void writeWord(uint16_t address, uint16_t value) noexcept;
+
+    uint16_t getRegisterPair(uint8_t pairCode) const noexcept;
+    void setRegisterPair(uint8_t pairCode, uint16_t value) noexcept;
+
+    void updateSignZeroParity(uint8_t value) noexcept;
+    void addToAccumulator(uint8_t value, bool withCarry) noexcept;
+    void subtractFromAccumulator(uint8_t value, bool withBorrow) noexcept;
+    void compareWithAccumulator(uint8_t value) noexcept;
+    void andWithAccumulator(uint8_t value) noexcept;
+    void xorWithAccumulator(uint8_t value) noexcept;
+    void orWithAccumulator(uint8_t value) noexcept;
+    uint8_t incrementByte(uint8_t value) noexcept;
+    uint8_t decrementByte(uint8_t value) noexcept;
+    void addRegisterPairToHL(uint16_t value) noexcept;
+    void decimalAdjustAccumulator() noexcept;
+
+    bool evaluateCondition(uint8_t conditionCode) const noexcept;
+    void pushWord(uint16_t value) noexcept;
+    uint16_t popWord() noexcept;
+    void callAddress(uint16_t address) noexcept;
+    bool servicePendingInterrupts() noexcept;
+    void updateInterruptEnableState() noexcept;
+
+    void logUndocumentedOpcode(uint8_t opcode) const;
+
     [[noreturn]] void throwUnimplementedOpcode(uint8_t opcode) const;
 
     RegisterBank registers_{};
@@ -119,6 +149,11 @@ private:
     IOBus ioBus_{};
     uint64_t elapsedCycles_ = 0U;
     bool halted_ = false;
+    bool interruptEnabled_ = false;
+    uint8_t interruptEnableDelay_ = 0U;
+    bool maskRst75_ = false;
+    bool maskRst65_ = false;
+    bool maskRst55_ = false;
     std::optional<PendingInterrupt> pendingInterrupt_;
 };
 

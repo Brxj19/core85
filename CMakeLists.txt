@@ -76,9 +76,15 @@ if(CORE85_BUILD_TESTS)
     enable_testing()
 
     add_executable(core85_tests
+        tests/test_arithmetic.cpp
+        tests/test_branch.cpp
         tests/test_cpu.cpp
+        tests/test_data_transfer.cpp
         tests/test_io.cpp
+        tests/test_logical.cpp
         tests/test_memory.cpp
+        tests/test_stack.cpp
+        tests/test_interrupts.cpp
     )
 
     target_link_libraries(core85_tests

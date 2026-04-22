@@ -154,7 +154,6 @@ TEST(CPUTest, HaltedCpuDoesNotAdvanceWithoutInterrupt) {
 TEST(CPUTest, RaisingInterruptReleasesHaltState) {
     CPU cpu;
     cpu.memory().writeByte(0x0000U, 0x76U);
-    cpu.memory().writeByte(0x0001U, 0x00U);
     cpu.step();
     ASSERT_TRUE(cpu.isHalted());
 
@@ -162,15 +161,18 @@ TEST(CPUTest, RaisingInterruptReleasesHaltState) {
     cpu.step();
 
     EXPECT_FALSE(cpu.isHalted());
-    EXPECT_EQ(cpu.getState().pc, 0x0002U);
-    EXPECT_EQ(cpu.getElapsedCycles(), 11U);
+    EXPECT_EQ(cpu.getState().pc, 0x0024U);
+    EXPECT_EQ(cpu.getElapsedCycles(), 19U);
 }
 
-TEST(CPUTest, UnimplementedOpcodeThrowsClearly) {
+TEST(CPUTest, UndocumentedOpcodeActsAsNop) {
     CPU cpu;
-    cpu.memory().writeByte(0x0000U, 0x3EU);
+    cpu.memory().writeByte(0x0000U, 0x08U);
 
-    EXPECT_THROW(cpu.step(), std::runtime_error);
+    cpu.step();
+
+    EXPECT_EQ(cpu.getState().pc, 0x0001U);
+    EXPECT_EQ(cpu.getElapsedCycles(), 4U);
 }
 
 TEST(CPUTest, InputPortValuesAreStoredThroughCpuApi) {
