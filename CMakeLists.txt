@@ -33,9 +33,15 @@ if(CORE85_BUILD_GUI)
     if(Qt6_FOUND)
         qt_add_executable(core85_gui
             src/gui/main.cpp
+            src/gui/codeeditor.cpp
+            src/gui/emulator_types.cpp
+            src/gui/emulatorcontroller.cpp
+            src/gui/iopanel.cpp
             src/gui/mainwindow.cpp
             src/gui/mainwindow.h
-            src/gui/mainwindow.ui
+            src/gui/memoryviewer.cpp
+            src/gui/registerviewer.cpp
+            src/gui/value_utils.cpp
         )
 
         set_target_properties(core85_gui PROPERTIES
