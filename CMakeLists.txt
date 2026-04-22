@@ -81,6 +81,7 @@ if(CORE85_BUILD_TESTS)
         tests/test_cpu.cpp
         tests/test_data_transfer.cpp
         tests/test_io.cpp
+        tests/test_instruction_matrix.cpp
         tests/test_logical.cpp
         tests/test_memory.cpp
         tests/test_stack.cpp
