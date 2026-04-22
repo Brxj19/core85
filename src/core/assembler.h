@@ -30,9 +30,18 @@ struct AssemblyResult {
     std::unordered_map<std::string, uint16_t> symbols;
 };
 
+struct HexLoadResult {
+    bool success = false;
+    uint16_t origin = 0U;
+    std::vector<uint8_t> bytes;
+    std::vector<AssemblerError> errors;
+};
+
 class Assembler {
 public:
     AssemblyResult assemble(std::string_view source) const;
+    std::string toIntelHex(const AssemblyResult& result) const;
+    HexLoadResult loadIntelHex(std::string_view source) const;
 };
 
 }  // namespace Core85

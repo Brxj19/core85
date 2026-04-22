@@ -77,6 +77,7 @@ if(CORE85_BUILD_TESTS)
 
     add_executable(core85_tests
         tests/test_arithmetic.cpp
+        tests/test_assembler.cpp
         tests/test_branch.cpp
         tests/test_cpu.cpp
         tests/test_data_transfer.cpp
