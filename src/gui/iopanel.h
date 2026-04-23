@@ -8,8 +8,8 @@
 #include "gui/emulator_types.h"
 
 class QCheckBox;
-class QLabel;
 class QSpinBox;
+class QWidget;
 
 namespace Core85::Gui {
 
@@ -39,10 +39,12 @@ private:
 
     QSpinBox* inputPortSpin_ = nullptr;
     QSpinBox* ledPortSpin_ = nullptr;
-    QSpinBox* segmentPortSpin_ = nullptr;
+    QSpinBox* segmentLeftPortSpin_ = nullptr;
+    QSpinBox* segmentRightPortSpin_ = nullptr;
     QVector<QCheckBox*> inputBits_{};
-    QVector<QLabel*> ledIndicators_{};
-    SevenSegmentDisplay* segmentDisplay_ = nullptr;
+    QVector<QWidget*> ledIndicators_{};
+    SevenSegmentDisplay* segmentLeftDisplay_ = nullptr;
+    SevenSegmentDisplay* segmentRightDisplay_ = nullptr;
     QByteArray inputPorts_;
     QByteArray outputPorts_;
 };

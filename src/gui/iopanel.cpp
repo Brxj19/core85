@@ -6,14 +6,108 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QSignalBlocker>
 #include <QPainter>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QVBoxLayout>
 
 #include "gui/value_utils.h"
 
 namespace Core85::Gui {
+
+class ToggleSwitch final : public QCheckBox {
+public:
+    explicit ToggleSwitch(const QString& text, QWidget* parent = nullptr)
+        : QCheckBox(text, parent) {
+        setCursor(Qt::PointingHandCursor);
+    }
+
+    QSize sizeHint() const override {
+        return QSize(84, 42);
+    }
+
+protected:
+    void paintEvent(QPaintEvent* event) override {
+        Q_UNUSED(event);
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+
+        const QRect switchRect(0, 8, 46, 24);
+        const bool darkTheme = palette().window().color().lightness() < 128;
+        const QColor trackColor = isChecked() ? QColor(QStringLiteral("#22C55E"))
+                                              : (darkTheme ? QColor(QStringLiteral("#334155"))
+                                                           : QColor(QStringLiteral("#CBD5E1")));
+        const QColor knobColor = QColor(QStringLiteral("#F8FAFC"));
+        const int knobX = isChecked() ? switchRect.right() - 20 : switchRect.left() + 2;
+
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(trackColor);
+        painter.drawRoundedRect(switchRect, 12, 12);
+
+        painter.setBrush(knobColor);
+        painter.drawEllipse(QRect(knobX, switchRect.top() + 2, 20, 20));
+
+        painter.setPen(palette().text().color());
+        painter.setFont(QFont(font().family(), font().pointSize() - 1, QFont::Bold));
+        painter.drawText(QRect(54, 0, width() - 54, height()),
+                         Qt::AlignVCenter | Qt::AlignLeft,
+                         text());
+    }
+};
+
+class LedIndicator final : public QWidget {
+public:
+    explicit LedIndicator(const QString& bitLabel, QWidget* parent = nullptr)
+        : QWidget(parent), bitLabel_(bitLabel) {
+        setMinimumSize(62, 70);
+    }
+
+    void setEnabledState(bool enabled) {
+        enabled_ = enabled;
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent* event) override {
+        Q_UNUSED(event);
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+
+        const QRectF ledRect((width() - 28) / 2.0, 8.0, 28.0, 28.0);
+        const QColor glowColor = enabled_ ? QColor(255, 196, 60, 110) : QColor(0, 0, 0, 0);
+        const QColor ledColor = enabled_ ? QColor(QStringLiteral("#FCD34D"))
+                                         : QColor(QStringLiteral("#334155"));
+        const QColor rimColor = enabled_ ? QColor(QStringLiteral("#F59E0B"))
+                                         : QColor(QStringLiteral("#475569"));
+
+        if (enabled_) {
+            painter.setBrush(glowColor);
+            painter.setPen(Qt::NoPen);
+            painter.drawEllipse(ledRect.adjusted(-8, -8, 8, 8));
+        }
+
+        QRadialGradient gradient(ledRect.center(), ledRect.width() / 2.0);
+        gradient.setColorAt(0.0, enabled_ ? QColor(QStringLiteral("#FFF7CC"))
+                                          : QColor(QStringLiteral("#64748B")));
+        gradient.setColorAt(1.0, ledColor);
+
+        painter.setBrush(gradient);
+        painter.setPen(QPen(rimColor, 1.5));
+        painter.drawEllipse(ledRect);
+
+        painter.setPen(palette().text().color());
+        painter.setFont(QFont(font().family(), font().pointSize() - 1, QFont::Bold));
+        painter.drawText(QRectF(0, 42, width(), 18), Qt::AlignCenter, bitLabel_);
+        painter.setPen(enabled_ ? QColor(QStringLiteral("#FCD34D"))
+                                : palette().mid().color());
+        painter.drawText(QRectF(0, 56, width(), 12), Qt::AlignCenter, enabled_ ? QStringLiteral("ON")
+                                                                                : QStringLiteral("OFF"));
+    }
+
+private:
+    QString bitLabel_;
+    bool enabled_ = false;
+};
 
 class IOPanel::SevenSegmentDisplay final : public QWidget {
 public:
@@ -64,7 +158,8 @@ IOPanel::IOPanel(QWidget* parent)
     : QWidget(parent),
       inputPortSpin_(new QSpinBox(this)),
       ledPortSpin_(new QSpinBox(this)),
-      segmentPortSpin_(new QSpinBox(this)),
+      segmentLeftPortSpin_(new QSpinBox(this)),
+      segmentRightPortSpin_(new QSpinBox(this)),
       inputPorts_(256, 0),
       outputPorts_(256, 0) {
     auto* rootLayout = new QHBoxLayout(this);
@@ -79,9 +174,11 @@ IOPanel::IOPanel(QWidget* parent)
     };
     configurePortSpin(inputPortSpin_);
     configurePortSpin(ledPortSpin_);
-    configurePortSpin(segmentPortSpin_);
+    configurePortSpin(segmentLeftPortSpin_);
+    configurePortSpin(segmentRightPortSpin_);
     ledPortSpin_->setValue(1);
-    segmentPortSpin_->setValue(2);
+    segmentLeftPortSpin_->setValue(2);
+    segmentRightPortSpin_->setValue(3);
 
     auto* inputGroup = new QGroupBox(QStringLiteral("Input Switches"), this);
     auto* inputLayout = new QVBoxLayout(inputGroup);
@@ -90,7 +187,7 @@ IOPanel::IOPanel(QWidget* parent)
     inputLayout->addLayout(inputForm);
     auto* inputBitsLayout = new QGridLayout();
     for (int bit = 7; bit >= 0; --bit) {
-        auto* checkBox = new QCheckBox(QStringLiteral("B%1").arg(bit), inputGroup);
+        auto* checkBox = new ToggleSwitch(QStringLiteral("B%1").arg(bit), inputGroup);
         inputBits_.push_back(checkBox);
         inputBitsLayout->addWidget(checkBox, (7 - bit) / 4, (7 - bit) % 4);
         connect(checkBox, &QCheckBox::toggled, this, &IOPanel::handleInputToggle);
@@ -105,34 +202,38 @@ IOPanel::IOPanel(QWidget* parent)
     ledLayout->addLayout(ledForm);
     auto* leds = new QGridLayout();
     for (int bit = 7; bit >= 0; --bit) {
-        auto* label = new QLabel(QStringLiteral("B%1").arg(bit), ledGroup);
-        label->setAlignment(Qt::AlignCenter);
-        label->setMinimumHeight(34);
-        label->setFrameShape(QFrame::StyledPanel);
-        ledIndicators_.push_back(label);
-        leds->addWidget(label, (7 - bit) / 4, (7 - bit) % 4);
+        auto* indicator = new LedIndicator(QStringLiteral("B%1").arg(bit), ledGroup);
+        ledIndicators_.push_back(indicator);
+        leds->addWidget(indicator, (7 - bit) / 4, (7 - bit) % 4);
     }
     ledLayout->addLayout(leds);
     rootLayout->addWidget(ledGroup, 1);
 
-    auto* segmentGroup = new QGroupBox(QStringLiteral("7-Segment Display"), this);
+    auto* segmentGroup = new QGroupBox(QStringLiteral("2-Digit 7-Segment"), this);
     auto* segmentLayout = new QVBoxLayout(segmentGroup);
     auto* segmentForm = new QFormLayout();
-    segmentForm->addRow(QStringLiteral("Port"), segmentPortSpin_);
+    segmentForm->addRow(QStringLiteral("Left Port"), segmentLeftPortSpin_);
+    segmentForm->addRow(QStringLiteral("Right Port"), segmentRightPortSpin_);
     segmentLayout->addLayout(segmentForm);
-    segmentDisplay_ = new SevenSegmentDisplay(segmentGroup);
-    segmentLayout->addWidget(segmentDisplay_, 1);
+    auto* digitsLayout = new QHBoxLayout();
+    segmentLeftDisplay_ = new SevenSegmentDisplay(segmentGroup);
+    segmentRightDisplay_ = new SevenSegmentDisplay(segmentGroup);
+    digitsLayout->addWidget(segmentLeftDisplay_, 1);
+    digitsLayout->addWidget(segmentRightDisplay_, 1);
+    segmentLayout->addLayout(digitsLayout, 1);
     rootLayout->addWidget(segmentGroup, 1);
 
     connect(inputPortSpin_, qOverload<int>(&QSpinBox::valueChanged), this, &IOPanel::emitProjectMetadata);
     connect(ledPortSpin_, qOverload<int>(&QSpinBox::valueChanged), this, &IOPanel::emitProjectMetadata);
-    connect(segmentPortSpin_, qOverload<int>(&QSpinBox::valueChanged), this, &IOPanel::emitProjectMetadata);
+    connect(segmentLeftPortSpin_, qOverload<int>(&QSpinBox::valueChanged), this, &IOPanel::emitProjectMetadata);
+    connect(segmentRightPortSpin_, qOverload<int>(&QSpinBox::valueChanged), this, &IOPanel::emitProjectMetadata);
 }
 
 void IOPanel::setProjectMetadata(const ProjectMetadata& metadata) {
     inputPortSpin_->setValue(metadata.inputPort);
     ledPortSpin_->setValue(metadata.ledPort);
-    segmentPortSpin_->setValue(metadata.segmentPort);
+    segmentLeftPortSpin_->setValue(metadata.segmentLeftPort);
+    segmentRightPortSpin_->setValue(metadata.segmentRightPort);
     refreshOutputWidgets();
 }
 
@@ -140,7 +241,8 @@ ProjectMetadata IOPanel::projectMetadata() const {
     return ProjectMetadata{
         static_cast<quint8>(inputPortSpin_->value()),
         static_cast<quint8>(ledPortSpin_->value()),
-        static_cast<quint8>(segmentPortSpin_->value()),
+        static_cast<quint8>(segmentLeftPortSpin_->value()),
+        static_cast<quint8>(segmentRightPortSpin_->value()),
     };
 }
 
@@ -184,14 +286,13 @@ void IOPanel::refreshOutputWidgets() {
     for (int visualIndex = 0; visualIndex < ledIndicators_.size(); ++visualIndex) {
         const int bit = 7 - visualIndex;
         const bool enabled = (ledValue & (1U << bit)) != 0U;
-        ledIndicators_.at(visualIndex)->setText(QStringLiteral("B%1\n%2").arg(bit).arg(enabled ? QStringLiteral("ON")
-                                                                                               : QStringLiteral("OFF")));
-        ledIndicators_.at(visualIndex)->setStyleSheet(enabled ? QStringLiteral("background: #FDE68A; color: #78350F;")
-                                                              : QStringLiteral("background: #E5E7EB; color: #4B5563;"));
+        static_cast<LedIndicator*>(ledIndicators_.at(visualIndex))->setEnabledState(enabled);
     }
 
-    const quint8 segmentValue = static_cast<quint8>(outputPorts_.at(segmentPortSpin_->value()));
-    segmentDisplay_->setValue(segmentValue);
+    const quint8 leftSegmentValue = static_cast<quint8>(outputPorts_.at(segmentLeftPortSpin_->value()));
+    const quint8 rightSegmentValue = static_cast<quint8>(outputPorts_.at(segmentRightPortSpin_->value()));
+    segmentLeftDisplay_->setValue(leftSegmentValue);
+    segmentRightDisplay_->setValue(rightSegmentValue);
 }
 
 }  // namespace Core85::Gui

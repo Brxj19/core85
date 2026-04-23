@@ -12,10 +12,15 @@
 class QAction;
 class QComboBox;
 class QDockWidget;
+class QFileSystemModel;
 class QLabel;
 class QMenu;
+class QModelIndex;
 class QPlainTextEdit;
+class QStackedWidget;
+class QTabWidget;
 class QToolBar;
+class QTreeView;
 
 namespace Core85::Gui {
 class CodeEditor;
@@ -35,7 +40,9 @@ public:
 private slots:
     void assembleAndLoad();
     void openSourceFile();
+    void openWorkspaceFolder();
     void saveSourceFile();
+    void saveAllFiles();
     void saveSourceFileAs();
     void loadHexFile();
     void handleSnapshot(const Core85::Gui::EmulatorSnapshot& snapshot);
@@ -47,6 +54,10 @@ private slots:
     void handleInvalidRegisterInput(const QPoint& globalPos, const QString& message);
     void handleInvalidMemoryAddress(const QString& message);
     void handleProjectMetadataChanged(const Core85::Gui::ProjectMetadata& metadata);
+    void handleExplorerActivated(const QModelIndex& index);
+    void handleCurrentTabChanged(int index);
+    void handleTabCloseRequested(int index);
+    void handleEditorModificationChanged(bool modified);
     void applyLightTheme();
     void applyDarkTheme();
 
@@ -58,17 +69,34 @@ private:
     void wireController();
     void refreshStatusBar();
     void clearAssemblerErrors();
+    void clearExecutionLineHighlights();
     void showAssemblerErrors(const std::vector<Core85::AssemblerError>& errors);
     void rebuildSourceMappings(const std::vector<Core85::SourceMappingEntry>& sourceMap);
     void syncBreakpointAddresses();
     void requestControllerSnapshot();
     void setCurrentFilePath(const QString& path);
+    void updateWindowTitle();
+    void refreshActionIcons();
     bool saveSourceToPath(const QString& path);
-    void loadSourceFromPath(const QString& path);
+    bool saveEditorToPath(Core85::Gui::CodeEditor* editor, const QString& path);
+    bool saveEditorAs(Core85::Gui::CodeEditor* editor);
+    bool maybeSaveEditor(Core85::Gui::CodeEditor* editor);
+    bool maybeSaveAllEditors();
+    void openTextFileInTab(const QString& path);
     void loadHexFromPath(const QString& path);
-    QString projectMetadataPath() const;
-    void loadProjectMetadata();
-    void saveProjectMetadata() const;
+    void setWorkspaceRoot(const QString& path);
+    void createUntitledTab();
+    int findEditorTabByPath(const QString& path) const;
+    Core85::Gui::CodeEditor* currentEditor() const;
+    Core85::Gui::CodeEditor* editorAt(int index) const;
+    QString editorFilePath(const Core85::Gui::CodeEditor* editor) const;
+    void setEditorFilePath(Core85::Gui::CodeEditor* editor, const QString& path);
+    QString currentEditorFilePath() const;
+    QString editorDisplayName(const Core85::Gui::CodeEditor* editor) const;
+    void updateTabTitle(Core85::Gui::CodeEditor* editor);
+    QString projectMetadataPathForFile(const QString& filePath) const;
+    void loadProjectMetadataForFile(const QString& filePath);
+    void saveProjectMetadataForFile(const QString& filePath) const;
     void applyTheme(const QString& themeName);
     void loadSettings();
     void saveSettings() const;
@@ -80,13 +108,18 @@ private:
     Core85::Assembler assembler_{};
     QThread emulatorThread_{};
     Core85::Gui::EmulatorController* emulatorController_ = nullptr;
-    Core85::Gui::CodeEditor* codeEditor_ = nullptr;
+    Core85::Gui::CodeEditor* loadedEditor_ = nullptr;
     Core85::Gui::RegisterViewer* registerViewer_ = nullptr;
     Core85::Gui::MemoryViewer* memoryViewer_ = nullptr;
     Core85::Gui::IOPanel* ioPanel_ = nullptr;
     QPlainTextEdit* errorConsole_ = nullptr;
+    QFileSystemModel* fileSystemModel_ = nullptr;
+    QStackedWidget* explorerStack_ = nullptr;
+    QTreeView* explorerTree_ = nullptr;
+    QTabWidget* editorTabs_ = nullptr;
     QMenu* viewMenu_ = nullptr;
     QToolBar* executionToolBar_ = nullptr;
+    QDockWidget* explorerDock_ = nullptr;
     QDockWidget* registersDock_ = nullptr;
     QDockWidget* memoryDock_ = nullptr;
     QDockWidget* ioDock_ = nullptr;
@@ -98,6 +131,8 @@ private:
     QAction* stepOverAction_ = nullptr;
     QAction* resetAction_ = nullptr;
     QAction* autoFollowAction_ = nullptr;
+    QAction* openFolderAction_ = nullptr;
+    QAction* saveAllAction_ = nullptr;
     QComboBox* speedCombo_ = nullptr;
     QLabel* pcStatusLabel_ = nullptr;
     QLabel* cyclesStatusLabel_ = nullptr;
@@ -109,8 +144,10 @@ private:
     bool hasSnapshot_ = false;
     QString currentFilePath_{};
     QString currentTheme_{QStringLiteral("dark")};
+    QString workspaceRootPath_{};
     QHash<quint16, int> addressToLine_{};
     QHash<int, quint16> lineToAddress_{};
+    int untitledCounter_ = 1;
 };
 
 #endif

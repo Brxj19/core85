@@ -25,7 +25,8 @@ struct EmulatorSnapshot {
 struct ProjectMetadata {
     quint8 inputPort = 0x00U;
     quint8 ledPort = 0x01U;
-    quint8 segmentPort = 0x02U;
+    quint8 segmentLeftPort = 0x02U;
+    quint8 segmentRightPort = 0x03U;
 };
 
 QString executionStateToString(ExecutionState state);
