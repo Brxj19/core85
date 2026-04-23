@@ -42,6 +42,14 @@ qrc_*.cpp
 /core85_tests
 /bin/
 /lib/
+/stage/
+/dist/
+
+# Package artefacts
+*.dmg
+*.tar.gz
+*.zip
+*.sha256
 
 # Ninja and Make artifacts
 .ninja_deps

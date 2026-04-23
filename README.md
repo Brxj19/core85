@@ -1,24 +1,17 @@
 # Core85
 
-Core85 is a cross-platform Intel 8085 emulator and simulator being built in modern C++17 with a Qt 6 desktop frontend. The project is driven by the requirements in [docs/Core85_SRS_v1.0.docx](docs/Core85_SRS_v1.0.docx), with a phased roadmap covering the emulator core, instruction set, assembler, GUI, and packaging.
+Core85 is a cross-platform Intel 8085 emulator and educational simulator built in modern C++17 with a Qt 6 desktop frontend. Version 1.0 includes a Qt debugger-style GUI, a two-pass assembler, Intel HEX support, instruction-level test coverage, and packaging via CMake/CPack.
 
-## Current Status
+The project is driven by [docs/Core85_SRS_v1.0.docx](docs/Core85_SRS_v1.0.docx). The emulator core in `src/core/` remains Qt-free and is linked into the GUI from `src/gui/`.
 
-The project is in the early backend phase.
+## Version 1.0 Highlights
 
-- `core85_lib` has been scaffolded as a standalone core library with no Qt dependency.
-- The CPU foundation includes register state, flag packing/unpacking, reset behavior, cycle tracking, and safe stepping support for `NOP` and `HLT`.
-- The memory subsystem includes a 64 KB address space, `0xFF` default values, ROM protection, and bulk program loading.
-- The I/O bus includes 256 input ports, 256 output ports, and output callbacks.
-- Initial unit tests cover CPU state, memory behavior, ROM protection, and I/O behavior.
-- The assembler and GUI are present as early placeholders and will be expanded in later phases.
-
-## Goals
-
-- Emulate the Intel 8085 accurately enough for instruction-by-instruction learning and experimentation.
-- Keep the emulator core portable and independent from UI concerns.
-- Provide a desktop simulator with a code editor, register viewer, memory viewer, and I/O widgets.
-- Support an integrated assembler and direct loading of assembly programs into memory.
+- complete 8085 execution engine with instruction, flag, and timing validation
+- two-pass assembler with labels, directives, and Intel HEX import/export
+- debugger-oriented Qt GUI with editor, Problems panel, register view, memory view, and I/O widgets
+- onboarding flow, session persistence, recent files/folders, and keyboard-first debugging workflow
+- 2-digit 7-segment display, LED panel, and switch input teaching peripherals
+- CMake install rules and CPack packaging for macOS, Windows, and Linux release artefacts
 
 ## Repository Layout
 
@@ -26,87 +19,116 @@ The project is in the early backend phase.
 Core85/
 ├── CMakeLists.txt
 ├── README.md
+├── RELEASE_NOTES_v1.0.md
+├── NOTICES.md
 ├── runbook.md
 ├── docs/
 │   └── Core85_SRS_v1.0.docx
 ├── src/
 │   ├── core/
-│   │   ├── assembler.cpp
-│   │   ├── assembler.h
-│   │   ├── cpu.cpp
-│   │   ├── cpu.h
-│   │   ├── io_bus.cpp
-│   │   ├── io_bus.h
-│   │   ├── memory.cpp
-│   │   ├── memory.h
-│   │   └── span.h
 │   └── gui/
-│       ├── components/
-│       ├── main.cpp
-│       ├── mainwindow.cpp
-│       ├── mainwindow.h
-│       └── mainwindow.ui
-└── tests/
-    ├── test_cpu.cpp
-    ├── test_io.cpp
-    └── test_memory.cpp
+├── tests/
+│   ├── asm/
+│   └── test_*.cpp
+└── .github/
+    └── workflows/
 ```
 
 ## Requirements
 
 - CMake `3.25+`
-- A C++17 compiler
+- C++17 compiler
   - Clang `15+`
   - GCC `12+`
   - MSVC 2022
-- Qt `6.x` for the GUI target
-- Internet access during configure time if `googletest` is fetched through CMake `FetchContent`
+- Qt `6.x` with `Widgets` for the GUI
+- internet access during configure if `googletest` is fetched via `FetchContent`
 
 ## Build
 
-Configure the project:
+### Configure with GUI
 
 ```bash
 cmake -S . -B build
 ```
 
-Build everything:
+On macOS with Homebrew Qt:
 
 ```bash
-cmake --build build
+cmake -S . -B build -G Ninja -DCMAKE_PREFIX_PATH="$(brew --prefix)/opt/qt"
 ```
 
-Build only the core library and tests:
+### Configure without GUI
 
 ```bash
 cmake -S . -B build -DCORE85_BUILD_GUI=OFF
+```
+
+### Build
+
+```bash
 cmake --build build
 ```
 
-Run tests:
+### Test
 
 ```bash
 ctest --test-dir build --output-on-failure
 ```
 
-## Architecture Notes
+### Run the GUI
 
-- `src/core/` is the emulator backend and must remain free of Qt dependencies.
-- `src/gui/` is the Qt frontend and should talk to the core only through the public CPU API.
-- The SRS defines the long-term contract for the public API, milestones, and acceptance criteria.
+```bash
+cmake --build build --target run
+```
 
-## Near-Term Roadmap
+## Package
 
-1. Expand CPU instruction decoding and execution beyond `NOP` and `HLT`.
-2. Implement ALU and flag behavior for arithmetic, logical, and branch instructions.
-3. Grow the unit test suite toward instruction-by-instruction coverage.
-4. Implement the two-pass assembler defined in the SRS.
-5. Replace the GUI placeholders with the full simulator interface.
+Binary packages are produced with CPack after a GUI-enabled configure:
 
-## Development Notes
+```bash
+cmake --build build --target package
+```
 
-- Treat the SRS as the source of truth for scope and behavior.
-- Favor small, testable increments in the core before building UI features on top.
-- Keep the core deterministic and easy to test in isolation.
+Platform defaults:
 
-For day-to-day engineering workflows, see [runbook.md](runbook.md).
+- macOS: `.zip`
+- Windows: `.zip`
+- Linux: `.tar.gz`
+
+The install tree includes:
+
+- `core85_gui` application artefact
+- `core85_lib` static library
+- public core headers
+- example assembly programs from `tests/asm/`
+- release docs and notices
+
+## Installed Contents
+
+Core85 installs runtime and developer-facing artefacts through standard CMake install directories:
+
+- binaries/bundles to `${CMAKE_INSTALL_BINDIR}` or app bundle root
+- static library to `${CMAKE_INSTALL_LIBDIR}`
+- core headers to `${CMAKE_INSTALL_INCLUDEDIR}/core85/core`
+- documentation to `${CMAKE_INSTALL_DOCDIR}`
+- sample programs to `${CMAKE_INSTALL_DATADIR}/core85/examples`
+
+## Testing and Quality
+
+The project currently ships with a large GTest suite covering CPU behavior, assembler behavior, interrupts, memory, I/O, and opcode-matrix validation.
+
+Typical local validation:
+
+```bash
+cmake --build build
+ctest --test-dir build --output-on-failure
+cmake --build build --target package
+```
+
+## Documentation
+
+- SRS: [docs/Core85_SRS_v1.0.docx](docs/Core85_SRS_v1.0.docx)
+- engineering workflow: [runbook.md](runbook.md)
+- release summary: [RELEASE_NOTES_v1.0.md](RELEASE_NOTES_v1.0.md)
+- notices and packaging/legal notes: [NOTICES.md](NOTICES.md)
