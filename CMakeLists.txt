@@ -31,6 +31,9 @@ set(CORE85_DOC_FILES
     RELEASE_NOTES_v1.0.md
 )
 
+set(CORE85_QT_PLUGIN_DIR "")
+set(CORE85_QCOCOA_PLUGIN "")
+
 add_library(core85_lib STATIC
     src/core/assembler.cpp
     src/core/cpu.cpp
@@ -105,11 +108,70 @@ if(CORE85_BUILD_GUI)
             RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
         )
 
-        qt_generate_deploy_app_script(
-            TARGET core85_gui
-            OUTPUT_SCRIPT CORE85_DEPLOY_SCRIPT
-            NO_UNSUPPORTED_PLATFORM_ERROR
-        )
+        if(APPLE)
+            find_program(CORE85_MACDEPLOYQT_EXECUTABLE
+                NAMES macdeployqt
+                HINTS
+                    "${Qt6_DIR}/../../../bin"
+                    "${Qt6_DIR}/../../../../bin"
+                    /opt/homebrew/opt/qt/bin
+                    /usr/local/opt/qt/bin
+            )
+            find_program(CORE85_QTPATHS_EXECUTABLE
+                NAMES qtpaths6 qtpaths
+                HINTS
+                    "${Qt6_DIR}/../../../bin"
+                    "${Qt6_DIR}/../../../../bin"
+                    /opt/homebrew/opt/qt/bin
+                    /usr/local/opt/qt/bin
+            )
+
+            if(CORE85_QTPATHS_EXECUTABLE)
+                execute_process(
+                    COMMAND "${CORE85_QTPATHS_EXECUTABLE}" --plugin-dir
+                    OUTPUT_VARIABLE CORE85_QT_PLUGIN_DIR
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                )
+            endif()
+
+            set(CORE85_QCOCOA_PLUGIN "")
+            foreach(plugin_root
+                    "${CORE85_QT_PLUGIN_DIR}"
+                    /opt/homebrew/share/qt/plugins
+                    /usr/local/share/qt/plugins)
+                if(plugin_root AND EXISTS "${plugin_root}/platforms/libqcocoa.dylib")
+                    set(CORE85_QCOCOA_PLUGIN "${plugin_root}/platforms/libqcocoa.dylib")
+                    break()
+                endif()
+            endforeach()
+
+            if(NOT CORE85_MACDEPLOYQT_EXECUTABLE)
+                message(FATAL_ERROR "macdeployqt is required to package Core85 on macOS.")
+            endif()
+
+            if(NOT CORE85_QCOCOA_PLUGIN)
+                message(FATAL_ERROR "Could not locate libqcocoa.dylib for macOS packaging.")
+            endif()
+
+            set(CORE85_DEPLOY_SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/core85_deploy.cmake")
+            file(GENERATE OUTPUT "${CORE85_DEPLOY_SCRIPT}" CONTENT
+"execute_process(
+    COMMAND \"${CORE85_MACDEPLOYQT_EXECUTABLE}\" \"core85_gui.app\" \"-no-plugins\" \"-always-overwrite\"
+    WORKING_DIRECTORY \"\${CMAKE_INSTALL_PREFIX}\"
+    COMMAND_ERROR_IS_FATAL ANY
+)
+file(MAKE_DIRECTORY \"\${CMAKE_INSTALL_PREFIX}/core85_gui.app/Contents/PlugIns/platforms\")
+file(COPY \"${CORE85_QCOCOA_PLUGIN}\"
+     DESTINATION \"\${CMAKE_INSTALL_PREFIX}/core85_gui.app/Contents/PlugIns/platforms\")
+")
+        else()
+            qt_generate_deploy_app_script(
+                TARGET core85_gui
+                OUTPUT_SCRIPT CORE85_DEPLOY_SCRIPT
+                NO_TRANSLATIONS
+                NO_UNSUPPORTED_PLATFORM_ERROR
+            )
+        endif()
 
         add_custom_target(run
             COMMAND $<TARGET_FILE:core85_gui>
@@ -215,11 +277,22 @@ set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/NOTICES.md")
 
 if(APPLE)
-    set(CPACK_GENERATOR "ZIP")
+    set(CPACK_GENERATOR "ZIP;DragNDrop")
+    set(CPACK_DMG_VOLUME_NAME "Core85 ${PROJECT_VERSION}")
 elseif(WIN32)
-    set(CPACK_GENERATOR "ZIP")
+    set(CPACK_GENERATOR "ZIP;NSIS")
+    set(CPACK_NSIS_DISPLAY_NAME "Core85")
+    set(CPACK_NSIS_PACKAGE_NAME "Core85")
+    set(CPACK_NSIS_INSTALL_ROOT "$PROGRAMFILES64")
+    set(CPACK_NSIS_MUI_FINISHPAGE_RUN "core85_gui.exe")
 else()
-    set(CPACK_GENERATOR "TGZ")
+    set(CPACK_GENERATOR "TGZ;DEB")
+    set(CPACK_DEBIAN_PACKAGE_NAME "core85")
+    set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Core85 Engineering Team")
+    set(CPACK_DEBIAN_PACKAGE_SECTION "education")
+    set(CPACK_DEBIAN_PACKAGE_DESCRIPTION ${CPACK_PACKAGE_DESCRIPTION_SUMMARY})
+    set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
 endif()
 
 set(CPACK_SOURCE_GENERATOR "TGZ;ZIP")

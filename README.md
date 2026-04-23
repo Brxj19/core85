@@ -11,7 +11,7 @@ The project is driven by [docs/Core85_SRS_v1.0.docx](docs/Core85_SRS_v1.0.docx).
 - debugger-oriented Qt GUI with editor, Problems panel, register view, memory view, and I/O widgets
 - onboarding flow, session persistence, recent files/folders, and keyboard-first debugging workflow
 - 2-digit 7-segment display, LED panel, and switch input teaching peripherals
-- CMake install rules and CPack packaging for macOS, Windows, and Linux release artefacts
+- CMake install rules plus archive and installer packaging for macOS, Windows, and Linux release artefacts
 
 ## Repository Layout
 
@@ -92,9 +92,9 @@ cmake --build build --target package
 
 Platform defaults:
 
-- macOS: `.zip`
-- Windows: `.zip`
-- Linux: `.tar.gz`
+- macOS: `.zip` archive and `.dmg` installer
+- Windows: `.zip` archive and `.exe` NSIS installer
+- Linux: `.tar.gz` archive and `.deb` package
 
 The install tree includes:
 

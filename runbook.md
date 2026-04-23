@@ -85,9 +85,9 @@ cmake --build build --target package
 
 Generated package types:
 
-- macOS: `.zip`
-- Windows: `.zip`
-- Linux: `.tar.gz`
+- macOS: `.zip` archive and `.dmg` installer
+- Windows: `.zip` archive and `.exe` NSIS installer
+- Linux: `.tar.gz` archive and `.deb` package
 
 ### Install to a local prefix
 
@@ -133,6 +133,7 @@ The CI matrix should:
 - build on macOS, Ubuntu, and Windows
 - run the full GTest suite
 - run a packaging smoke pass through the `package` target
+- verify both archive and installer outputs for each platform
 
 If packaging breaks on one platform, treat it as a release blocker for Phase 5.
 

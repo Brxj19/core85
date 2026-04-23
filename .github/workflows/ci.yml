@@ -63,9 +63,17 @@ jobs:
       - name: Package Smoke Test
         run: cmake --build build --target package --config ${{ matrix.build_type }}
 
+      - name: Verify Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          ls build/*.tar.gz
+          ls build/*.deb
+
       - name: Verify macOS app bundle
         if: runner.os == 'macOS'
         run: |
+          ls build/*.zip
+          ls build/*.dmg
           unzip -q build/*.zip -d package-smoke
           app_path="$(find package-smoke -name core85_gui.app -type d -print -quit)"
           test -n "$app_path"
@@ -73,11 +81,20 @@ jobs:
           otool -L "$app_path/Contents/MacOS/core85_gui" > macos-otool.txt
           ! grep -E '/opt/homebrew|/usr/local|/Users/' macos-otool.txt
 
+      - name: Verify Windows packages
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-ChildItem build\*.zip | Format-Table Name,Length
+          Get-ChildItem build\*.exe | Format-Table Name,Length
+
       - name: Upload Package Artefacts
         uses: actions/upload-artifact@v7
         with:
           name: core85-${{ runner.os }}
           path: |
+            build/*.deb
             build/*.dmg
+            build/*.exe
             build/*.zip
             build/*.tar.gz
