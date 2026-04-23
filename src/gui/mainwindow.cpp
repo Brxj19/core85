@@ -2,6 +2,7 @@
 
 #include <QActionGroup>
 #include <QApplication>
+#include <QCloseEvent>
 #include <QComboBox>
 #include <QDir>
 #include <QDockWidget>
@@ -23,7 +24,9 @@
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QStyle>
+#include <QTabBar>
 #include <QTabWidget>
+#include <QTextCursor>
 #include <QTextDocument>
 #include <QTextStream>
 #include <QThread>
@@ -34,10 +37,13 @@
 
 #include "gui/codeeditor.h"
 #include "gui/emulatorcontroller.h"
+#include "gui/findreplacebar.h"
 #include "gui/iopanel.h"
 #include "gui/memoryviewer.h"
+#include "gui/problemspanel.h"
 #include "gui/registerviewer.h"
 #include "gui/value_utils.h"
+#include "gui/welcomepage.h"
 
 namespace {
 
@@ -47,13 +53,6 @@ enum class TransportIconKind {
     StepInto,
     StepOver,
 };
-
-QString errorToString(const Core85::AssemblerError& error) {
-    return QStringLiteral("Line %1: %2 (%3)")
-        .arg(error.line)
-        .arg(QString::fromStdString(error.message))
-        .arg(QString::fromStdString(error.token));
-}
 
 QString fileDialogRoot(const QString& workspaceRoot, const QString& currentPath) {
     if (!currentPath.isEmpty()) {
@@ -76,8 +75,8 @@ QIcon makeTransportIcon(TransportIconKind kind, const QColor& color) {
 
     switch (kind) {
         case TransportIconKind::Run:
-            painter.drawPolygon(QPolygonF{
-                QPointF(7.0, 5.0), QPointF(19.0, 12.0), QPointF(7.0, 19.0)});
+            painter.drawPolygon(
+                QPolygonF{QPointF(7.0, 5.0), QPointF(19.0, 12.0), QPointF(7.0, 19.0)});
             break;
         case TransportIconKind::Pause:
             painter.drawRoundedRect(QRectF(6.0, 5.0, 4.5, 14.0), 1.5, 1.5);
@@ -85,17 +84,27 @@ QIcon makeTransportIcon(TransportIconKind kind, const QColor& color) {
             break;
         case TransportIconKind::StepInto:
             painter.drawRoundedRect(QRectF(5.0, 4.0, 2.5, 16.0), 1.0, 1.0);
-            painter.drawPolygon(QPolygonF{
-                QPointF(10.0, 5.0), QPointF(19.0, 12.0), QPointF(10.0, 19.0)});
+            painter.drawPolygon(
+                QPolygonF{QPointF(10.0, 5.0), QPointF(19.0, 12.0), QPointF(10.0, 19.0)});
             break;
         case TransportIconKind::StepOver:
-            painter.drawPolygon(QPolygonF{
-                QPointF(5.0, 5.0), QPointF(14.0, 12.0), QPointF(5.0, 19.0)});
+            painter.drawPolygon(
+                QPolygonF{QPointF(5.0, 5.0), QPointF(14.0, 12.0), QPointF(5.0, 19.0)});
             painter.drawRoundedRect(QRectF(16.5, 4.0, 2.5, 16.0), 1.0, 1.0);
             break;
     }
 
     return QIcon(pixmap);
+}
+
+QString sampleProgramText() {
+    return QStringLiteral(
+        "; Sample: mirror switches to LEDs\n"
+        ".ORG 0000H\n\n"
+        "START:  IN 00H\n"
+        "        OUT 01H\n"
+        "        JMP START\n\n"
+        "END\n");
 }
 
 }  // namespace
@@ -106,8 +115,9 @@ MainWindow::MainWindow(QWidget* parent)
 
     buildUi();
     wireController();
-    createUntitledTab();
     loadSettings();
+    refreshRecentMenus();
+    setWelcomeVisible(editorTabs_->count() == 0);
     refreshStatusBar();
     requestControllerSnapshot();
 }
@@ -118,9 +128,24 @@ MainWindow::~MainWindow() {
     emulatorThread_.wait();
 }
 
+void MainWindow::closeEvent(QCloseEvent* event) {
+    if (!maybeSaveAllEditors()) {
+        event->ignore();
+        return;
+    }
+
+    saveSettings();
+    QMainWindow::closeEvent(event);
+}
+
+void MainWindow::newAssemblyFile() {
+    createUntitledTab();
+}
+
 void MainWindow::assembleAndLoad() {
     auto* editor = currentEditor();
     if (editor == nullptr) {
+        messageStatusLabel_->setText(QStringLiteral("Open or create an assembly file first."));
         return;
     }
 
@@ -140,6 +165,7 @@ void MainWindow::assembleAndLoad() {
     }
 
     loadedEditor_ = editor;
+    hasLoadedProgram_ = true;
     rebuildSourceMappings(result.sourceMap);
     syncBreakpointAddresses();
     clearExecutionLineHighlights();
@@ -155,6 +181,7 @@ void MainWindow::assembleAndLoad() {
         QStringLiteral("Assembled %1 byte(s) at %2")
             .arg(result.bytes.size())
             .arg(Core85::Gui::formatHex16(result.origin)));
+    updateExecutionActions();
 }
 
 void MainWindow::openSourceFile() {
@@ -177,6 +204,37 @@ void MainWindow::openWorkspaceFolder() {
         QStringLiteral("Open Workspace Folder"),
         workspaceRootPath_.isEmpty() ? QDir::currentPath() : workspaceRootPath_);
     if (!path.isEmpty()) {
+        setWorkspaceRoot(path);
+    }
+}
+
+void MainWindow::openSampleProgram() {
+    createUntitledTab(sampleProgramText());
+    if (auto* editor = currentEditor()) {
+        editor->document()->setModified(false);
+        updateTabTitle(editor);
+    }
+    messageStatusLabel_->setText(QStringLiteral("Opened a sample program. Assemble it with Ctrl+Shift+B."));
+}
+
+void MainWindow::openRecentFile() {
+    const auto* action = qobject_cast<QAction*>(sender());
+    if (action == nullptr) {
+        return;
+    }
+    const QString path = action->data().toString();
+    if (!path.isEmpty() && QFileInfo::exists(path)) {
+        openTextFileInTab(path);
+    }
+}
+
+void MainWindow::openRecentFolder() {
+    const auto* action = qobject_cast<QAction*>(sender());
+    if (action == nullptr) {
+        return;
+    }
+    const QString path = action->data().toString();
+    if (!path.isEmpty() && QFileInfo(path).isDir()) {
         setWorkspaceRoot(path);
     }
 }
@@ -218,12 +276,7 @@ void MainWindow::saveAllFiles() {
 }
 
 void MainWindow::saveSourceFileAs() {
-    auto* editor = currentEditor();
-    if (editor == nullptr) {
-        return;
-    }
-
-    saveEditorAs(editor);
+    saveEditorAs(currentEditor());
 }
 
 void MainWindow::loadHexFile() {
@@ -249,6 +302,7 @@ void MainWindow::handleSnapshot(const Core85::Gui::EmulatorSnapshot& snapshot) {
     registerViewer_->setState(snapshot.cpuState, changedRegisters);
     registerViewer_->setInteractive(executionState_ != Core85::Gui::ExecutionState::Running);
     memoryViewer_->setMemorySnapshot(snapshot.memory, changedMemory);
+    memoryViewer_->setRegisterAnchors(snapshot.cpuState.pc, snapshot.cpuState.sp, snapshot.cpuState.hl);
     memoryViewer_->setInteractive(executionState_ != Core85::Gui::ExecutionState::Running);
     ioPanel_->setPortSnapshots(snapshot.inputPorts, snapshot.outputPorts);
 
@@ -328,8 +382,7 @@ void MainWindow::handleExplorerActivated(const QModelIndex& index) {
     }
 
     const QString path = fileSystemModel_->filePath(index);
-    QFileInfo info(path);
-    if (info.isDir()) {
+    if (QFileInfo(path).isDir()) {
         explorerTree_->setRootIndex(index);
         return;
     }
@@ -341,6 +394,7 @@ void MainWindow::handleCurrentTabChanged(int index) {
     auto* editor = editorAt(index);
     setCurrentFilePath(editor == nullptr ? QString() : editorFilePath(editor));
     loadProjectMetadataForFile(currentEditorFilePath());
+    setWelcomeVisible(editor == nullptr);
     refreshStatusBar();
 }
 
@@ -364,14 +418,195 @@ void MainWindow::handleTabCloseRequested(int index) {
     editor->deleteLater();
 
     if (editorTabs_->count() == 0) {
-        createUntitledTab();
+        setCurrentFilePath(QString());
+        setWelcomeVisible(true);
     }
 }
 
 void MainWindow::handleEditorModificationChanged(bool modified) {
     Q_UNUSED(modified);
-    if (auto* editor = qobject_cast<Core85::Gui::CodeEditor*>(sender()->parent())) {
+    auto* document = qobject_cast<QTextDocument*>(sender());
+    if (document == nullptr) {
+        return;
+    }
+
+    auto* editor = qobject_cast<Core85::Gui::CodeEditor*>(document->parent());
+    if (editor != nullptr) {
         updateTabTitle(editor);
+    }
+}
+
+void MainWindow::handleProblemActivated(int line) {
+    if (auto* editor = currentEditor()) {
+        editor->goToLine(line);
+    }
+}
+
+void MainWindow::showFindBar() {
+    if (findReplaceBar_ == nullptr) {
+        return;
+    }
+
+    if (auto* editor = currentEditor()) {
+        const QString selectedText = editor->textCursor().selectedText();
+        if (!selectedText.isEmpty()) {
+            findReplaceBar_->setFindText(selectedText);
+        }
+    }
+    findReplaceBar_->show();
+    findReplaceBar_->focusFind();
+}
+
+void MainWindow::showReplaceBar() {
+    showFindBar();
+}
+
+void MainWindow::hideFindBar() {
+    if (findReplaceBar_ != nullptr) {
+        findReplaceBar_->hide();
+    }
+}
+
+void MainWindow::findNext(const QString& text, bool caseSensitive, bool wholeWord) {
+    auto* editor = currentEditor();
+    if (editor == nullptr || text.isEmpty()) {
+        return;
+    }
+
+    if (!editor->find(text, buildFindFlags(false, caseSensitive, wholeWord))) {
+        QTextCursor cursor = editor->textCursor();
+        cursor.movePosition(QTextCursor::Start);
+        editor->setTextCursor(cursor);
+        editor->find(text, buildFindFlags(false, caseSensitive, wholeWord));
+    }
+}
+
+void MainWindow::findPrevious(const QString& text, bool caseSensitive, bool wholeWord) {
+    auto* editor = currentEditor();
+    if (editor == nullptr || text.isEmpty()) {
+        return;
+    }
+
+    if (!editor->find(text, buildFindFlags(true, caseSensitive, wholeWord))) {
+        QTextCursor cursor = editor->textCursor();
+        cursor.movePosition(QTextCursor::End);
+        editor->setTextCursor(cursor);
+        editor->find(text, buildFindFlags(true, caseSensitive, wholeWord));
+    }
+}
+
+void MainWindow::replaceOne(const QString& findText,
+                            const QString& replaceText,
+                            bool caseSensitive,
+                            bool wholeWord) {
+    auto* editor = currentEditor();
+    if (editor == nullptr || findText.isEmpty()) {
+        return;
+    }
+
+    QTextCursor cursor = editor->textCursor();
+    if (!cursor.hasSelection() || cursor.selectedText() != findText) {
+        findNext(findText, caseSensitive, wholeWord);
+        cursor = editor->textCursor();
+    }
+
+    if (cursor.hasSelection()) {
+        cursor.insertText(replaceText);
+    }
+    findNext(findText, caseSensitive, wholeWord);
+}
+
+void MainWindow::replaceAll(const QString& findText,
+                            const QString& replaceText,
+                            bool caseSensitive,
+                            bool wholeWord) {
+    auto* editor = currentEditor();
+    if (editor == nullptr || findText.isEmpty()) {
+        return;
+    }
+
+    QTextCursor cursor = editor->textCursor();
+    cursor.beginEditBlock();
+    cursor.movePosition(QTextCursor::Start);
+    editor->setTextCursor(cursor);
+
+    int replacementCount = 0;
+    while (editor->find(findText, buildFindFlags(false, caseSensitive, wholeWord))) {
+        QTextCursor matchCursor = editor->textCursor();
+        matchCursor.insertText(replaceText);
+        ++replacementCount;
+    }
+
+    cursor = editor->textCursor();
+    cursor.endEditBlock();
+    messageStatusLabel_->setText(QStringLiteral("Replaced %1 occurrence(s)").arg(replacementCount));
+}
+
+void MainWindow::goToLine(int line) {
+    if (auto* editor = currentEditor()) {
+        editor->goToLine(line);
+    }
+}
+
+void MainWindow::showTabContextMenu(const QPoint& pos) {
+    QMenu menu(this);
+    menu.addAction(QStringLiteral("Close"), this, [this]() {
+        handleTabCloseRequested(editorTabs_->currentIndex());
+    });
+    menu.addAction(QStringLiteral("Close Others"), this, &MainWindow::closeOtherTabs);
+    menu.addAction(QStringLiteral("Duplicate Tab"), this, &MainWindow::duplicateCurrentTab);
+    menu.addSeparator();
+    menu.addAction(QStringLiteral("Reveal in Explorer"), this, &MainWindow::revealCurrentFileInExplorer);
+    menu.exec(editorTabs_->tabBar()->mapToGlobal(pos));
+}
+
+void MainWindow::duplicateCurrentTab() {
+    auto* editor = currentEditor();
+    if (editor == nullptr) {
+        return;
+    }
+
+    createUntitledTab(editor->toPlainText());
+    if (auto* duplicated = currentEditor()) {
+        duplicated->document()->setModified(true);
+        updateTabTitle(duplicated);
+    }
+}
+
+void MainWindow::closeOtherTabs() {
+    auto* keep = currentEditor();
+    if (keep == nullptr) {
+        return;
+    }
+
+    for (int index = editorTabs_->count() - 1; index >= 0; --index) {
+        auto* editor = editorAt(index);
+        if (editor != nullptr && editor != keep) {
+            editorTabs_->setCurrentIndex(index);
+            handleTabCloseRequested(index);
+        }
+    }
+    editorTabs_->setCurrentWidget(keep);
+}
+
+void MainWindow::revealCurrentFileInExplorer() {
+    const QString path = currentEditorFilePath();
+    if (path.isEmpty()) {
+        messageStatusLabel_->setText(QStringLiteral("Only saved files can be revealed in the explorer."));
+        return;
+    }
+
+    QFileInfo info(path);
+    if (workspaceRootPath_.isEmpty() || !info.absoluteFilePath().startsWith(workspaceRootPath_)) {
+        setWorkspaceRoot(info.absolutePath());
+    }
+
+    const QModelIndex index = fileSystemModel_->index(path);
+    if (index.isValid()) {
+        explorerTree_->expand(index.parent());
+        explorerTree_->setCurrentIndex(index);
+        explorerTree_->scrollTo(index);
+        explorerDock_->raise();
     }
 }
 
@@ -383,6 +618,23 @@ void MainWindow::applyDarkTheme() {
     applyTheme(QStringLiteral("dark"));
 }
 
+void MainWindow::showKeyboardShortcuts() {
+    QMessageBox::information(
+        this,
+        QStringLiteral("Keyboard Shortcuts"),
+        QStringLiteral(
+            "Ctrl+Shift+B Assemble and Load\n"
+            "F5 Run\n"
+            "Shift+F5 Pause\n"
+            "F11 Step Into\n"
+            "F10 Step Over\n"
+            "Ctrl+Shift+R Reset\n"
+            "Ctrl+F Find\n"
+            "Ctrl+H Replace\n"
+            "Ctrl+G Go to Line\n"
+            "Ctrl+L Toggle Follow PC"));
+}
+
 void MainWindow::buildUi() {
     createMenus();
     createToolbar();
@@ -391,7 +643,7 @@ void MainWindow::buildUi() {
     pcStatusLabel_ = new QLabel(QStringLiteral("PC: 0x0000"), this);
     cyclesStatusLabel_ = new QLabel(QStringLiteral("T-States: 0"), this);
     stateStatusLabel_ = new QLabel(QStringLiteral("State: Paused"), this);
-    messageStatusLabel_ = new QLabel(QStringLiteral("Ready"), this);
+    messageStatusLabel_ = new QLabel(QStringLiteral("Welcome to Core85"), this);
     statusBar()->addWidget(messageStatusLabel_, 1);
     statusBar()->addPermanentWidget(pcStatusLabel_);
     statusBar()->addPermanentWidget(cyclesStatusLabel_);
@@ -402,22 +654,33 @@ void MainWindow::createMenus() {
     auto* fileMenu = menuBar()->addMenu(QStringLiteral("&File"));
 
     auto* newAction = fileMenu->addAction(style()->standardIcon(QStyle::SP_FileIcon),
-                                          QStringLiteral("&New File"),
+                                          QStringLiteral("&New Assembly File"),
                                           this,
-                                          [this]() { createUntitledTab(); });
+                                          &MainWindow::newAssemblyFile);
     newAction->setShortcut(QKeySequence::New);
+    newAction->setToolTip(QStringLiteral("Create a new assembly source file (Ctrl+N)"));
 
     auto* openAction = fileMenu->addAction(style()->standardIcon(QStyle::SP_DialogOpenButton),
                                            QStringLiteral("&Open Files..."),
                                            this,
                                            &MainWindow::openSourceFile);
     openAction->setShortcut(QKeySequence::Open);
+    openAction->setToolTip(QStringLiteral("Open one or more assembly files (Ctrl+O)"));
 
     openFolderAction_ = fileMenu->addAction(style()->standardIcon(QStyle::SP_DirOpenIcon),
                                             QStringLiteral("Open &Folder..."),
                                             this,
                                             &MainWindow::openWorkspaceFolder);
     openFolderAction_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Alt+O")));
+    openFolderAction_->setToolTip(QStringLiteral("Open a workspace folder in the explorer (Ctrl+Alt+O)"));
+
+    fileMenu->addAction(style()->standardIcon(QStyle::SP_ComputerIcon),
+                        QStringLiteral("Open &Sample Program"),
+                        this,
+                        &MainWindow::openSampleProgram);
+
+    recentFilesMenu_ = fileMenu->addMenu(QStringLiteral("Open Recent &Files"));
+    recentFoldersMenu_ = fileMenu->addMenu(QStringLiteral("Open Recent F&olders"));
 
     fileMenu->addSeparator();
 
@@ -426,6 +689,7 @@ void MainWindow::createMenus() {
                                            this,
                                            &MainWindow::saveSourceFile);
     saveAction->setShortcut(QKeySequence::Save);
+    saveAction->setToolTip(QStringLiteral("Save the active file (Ctrl+S)"));
 
     saveAllAction_ = fileMenu->addAction(style()->standardIcon(QStyle::SP_DialogSaveButton),
                                          QStringLiteral("Save A&ll"),
@@ -433,7 +697,8 @@ void MainWindow::createMenus() {
                                          &MainWindow::saveAllFiles);
     saveAllAction_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+S")));
 
-    auto* saveAsAction = fileMenu->addAction(QStringLiteral("Save &As..."), this, &MainWindow::saveSourceFileAs);
+    auto* saveAsAction =
+        fileMenu->addAction(QStringLiteral("Save &As..."), this, &MainWindow::saveSourceFileAs);
     saveAsAction->setShortcut(QKeySequence::SaveAs);
 
     fileMenu->addSeparator();
@@ -446,18 +711,37 @@ void MainWindow::createMenus() {
                                            &QWidget::close);
     exitAction->setShortcut(QKeySequence::Quit);
 
+    auto* editMenu = menuBar()->addMenu(QStringLiteral("&Edit"));
+    auto* findAction = editMenu->addAction(QStringLiteral("&Find"), this, &MainWindow::showFindBar);
+    findAction->setShortcut(QKeySequence::Find);
+    auto* replaceAction =
+        editMenu->addAction(QStringLiteral("&Replace"), this, &MainWindow::showReplaceBar);
+    replaceAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+H")));
+    auto* gotoAction = editMenu->addAction(QStringLiteral("&Go to Line"), this, [this]() {
+        showFindBar();
+        if (findReplaceBar_ != nullptr) {
+            findReplaceBar_->focusGoToLine();
+        }
+    });
+    gotoAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+G")));
+
     viewMenu_ = menuBar()->addMenu(QStringLiteral("&View"));
 
     auto* preferencesMenu = menuBar()->addMenu(QStringLiteral("&Preferences"));
-    auto* themeGroup = new QActionGroup(this);
-    themeGroup->setExclusive(true);
-    auto* lightAction = preferencesMenu->addAction(QStringLiteral("&Light Theme"), this, &MainWindow::applyLightTheme);
-    auto* darkAction = preferencesMenu->addAction(QStringLiteral("&Dark Theme"), this, &MainWindow::applyDarkTheme);
-    lightAction->setCheckable(true);
-    darkAction->setCheckable(true);
-    themeGroup->addAction(lightAction);
-    themeGroup->addAction(darkAction);
-    darkAction->setChecked(true);
+    themeGroup_ = new QActionGroup(this);
+    themeGroup_->setExclusive(true);
+    lightThemeAction_ =
+        preferencesMenu->addAction(QStringLiteral("&Light Theme"), this, &MainWindow::applyLightTheme);
+    darkThemeAction_ =
+        preferencesMenu->addAction(QStringLiteral("&Dark Theme"), this, &MainWindow::applyDarkTheme);
+    lightThemeAction_->setCheckable(true);
+    darkThemeAction_->setCheckable(true);
+    themeGroup_->addAction(lightThemeAction_);
+    themeGroup_->addAction(darkThemeAction_);
+    darkThemeAction_->setChecked(true);
+
+    auto* helpMenu = menuBar()->addMenu(QStringLiteral("&Help"));
+    helpMenu->addAction(QStringLiteral("Keyboard &Shortcuts"), this, &MainWindow::showKeyboardShortcuts);
 }
 
 void MainWindow::createToolbar() {
@@ -472,12 +756,12 @@ void MainWindow::createToolbar() {
         viewMenu_->addSeparator();
     }
 
-    assembleAction_ =
-        executionToolBar_->addAction(style()->standardIcon(QStyle::SP_DialogApplyButton),
-                                     QStringLiteral("Assemble & Load"),
-                                     this,
-                                     &MainWindow::assembleAndLoad);
+    assembleAction_ = executionToolBar_->addAction(style()->standardIcon(QStyle::SP_DialogApplyButton),
+                                                   QStringLiteral("Assemble & Load"),
+                                                   this,
+                                                   &MainWindow::assembleAndLoad);
     assembleAction_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+B")));
+    assembleAction_->setToolTip(QStringLiteral("Assemble and load the active file (Ctrl+Shift+B)"));
 
     runAction_ = executionToolBar_->addAction(QIcon(),
                                               QStringLiteral("Run"),
@@ -488,6 +772,7 @@ void MainWindow::createToolbar() {
                                                       Qt::QueuedConnection);
                                               });
     runAction_->setShortcut(QKeySequence(Qt::Key_F5));
+    runAction_->setToolTip(QStringLiteral("Run the loaded program (F5)"));
 
     pauseAction_ = executionToolBar_->addAction(QIcon(),
                                                 QStringLiteral("Pause"),
@@ -498,6 +783,7 @@ void MainWindow::createToolbar() {
                                                         Qt::QueuedConnection);
                                                 });
     pauseAction_->setShortcut(QKeySequence(QStringLiteral("Shift+F5")));
+    pauseAction_->setToolTip(QStringLiteral("Pause execution (Shift+F5)"));
 
     stepIntoAction_ = executionToolBar_->addAction(QIcon(),
                                                    QStringLiteral("Step Into"),
@@ -508,6 +794,7 @@ void MainWindow::createToolbar() {
                                                            Qt::QueuedConnection);
                                                    });
     stepIntoAction_->setShortcut(QKeySequence(Qt::Key_F11));
+    stepIntoAction_->setToolTip(QStringLiteral("Execute the next instruction (F11)"));
 
     stepOverAction_ = executionToolBar_->addAction(QIcon(),
                                                    QStringLiteral("Step Over"),
@@ -518,6 +805,7 @@ void MainWindow::createToolbar() {
                                                            Qt::QueuedConnection);
                                                    });
     stepOverAction_->setShortcut(QKeySequence(Qt::Key_F10));
+    stepOverAction_->setToolTip(QStringLiteral("Step over CALL instructions (F10)"));
 
     resetAction_ = executionToolBar_->addAction(style()->standardIcon(QStyle::SP_BrowserReload),
                                                 QStringLiteral("Reset"),
@@ -528,6 +816,7 @@ void MainWindow::createToolbar() {
                                                         Qt::QueuedConnection);
                                                 });
     resetAction_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+R")));
+    resetAction_->setToolTip(QStringLiteral("Reset CPU state to the last loaded program (Ctrl+Shift+R)"));
 
     executionToolBar_->addSeparator();
     autoFollowAction_ = executionToolBar_->addAction(style()->standardIcon(QStyle::SP_FileDialogDetailedView),
@@ -535,6 +824,7 @@ void MainWindow::createToolbar() {
     autoFollowAction_->setCheckable(true);
     autoFollowAction_->setChecked(true);
     autoFollowAction_->setShortcut(QKeySequence(QStringLiteral("Ctrl+L")));
+    autoFollowAction_->setToolTip(QStringLiteral("Keep the memory view focused on the PC (Ctrl+L)"));
 
     executionToolBar_->addSeparator();
     executionToolBar_->addWidget(new QLabel(QStringLiteral("Speed"), executionToolBar_));
@@ -545,18 +835,35 @@ void MainWindow::createToolbar() {
                            QStringLiteral("Fast"),
                            QStringLiteral("Max")});
     speedCombo_->setCurrentIndex(4);
+    speedCombo_->setToolTip(QStringLiteral("Choose how quickly the emulator runs between UI updates."));
     executionToolBar_->addWidget(speedCombo_);
     refreshActionIcons();
 }
 
 void MainWindow::createDocks() {
-    editorTabs_ = new QTabWidget(this);
+    centerStack_ = new QStackedWidget(this);
+    welcomePage_ = new Core85::Gui::WelcomePage(centerStack_);
+    auto* editorPage = new QWidget(centerStack_);
+    auto* editorLayout = new QVBoxLayout(editorPage);
+    editorLayout->setContentsMargins(0, 0, 0, 0);
+    editorLayout->setSpacing(0);
+
+    findReplaceBar_ = new Core85::Gui::FindReplaceBar(editorPage);
+    findReplaceBar_->hide();
+    editorLayout->addWidget(findReplaceBar_);
+
+    editorTabs_ = new QTabWidget(editorPage);
     editorTabs_->setDocumentMode(true);
     editorTabs_->setMovable(true);
     editorTabs_->setTabsClosable(true);
-    setCentralWidget(editorTabs_);
+    editorTabs_->tabBar()->setContextMenuPolicy(Qt::CustomContextMenu);
+    editorLayout->addWidget(editorTabs_, 1);
 
-    explorerDock_ = new QDockWidget(QStringLiteral("Explorer"), this);
+    centerStack_->addWidget(welcomePage_);
+    centerStack_->addWidget(editorPage);
+    setCentralWidget(centerStack_);
+
+    explorerDock_ = new QDockWidget(QStringLiteral("Workspace"), this);
     explorerDock_->setObjectName(QStringLiteral("explorer_dock"));
     explorerStack_ = new QStackedWidget(explorerDock_);
     fileSystemModel_ = new QFileSystemModel(explorerDock_);
@@ -591,7 +898,7 @@ void MainWindow::createDocks() {
     placeholderLayout->addWidget(placeholderTitle);
 
     auto* placeholderText = new QLabel(
-        QStringLiteral("You can start coding without a folder, or open a directory to browse files here."),
+        QStringLiteral("Start writing immediately, or open a directory to browse files, demos, and saved projects."),
         placeholder);
     placeholderText->setAlignment(Qt::AlignCenter);
     placeholderText->setWordWrap(true);
@@ -608,11 +915,8 @@ void MainWindow::createDocks() {
     explorerStack_->addWidget(placeholder);
     explorerStack_->addWidget(explorerTree_);
     explorerStack_->setCurrentIndex(0);
-
     explorerDock_->setWidget(explorerStack_);
     addDockWidget(Qt::LeftDockWidgetArea, explorerDock_);
-
-    connect(openFolderButton, &QPushButton::clicked, this, &MainWindow::openWorkspaceFolder);
 
     registersDock_ = new QDockWidget(QStringLiteral("Registers"), this);
     registersDock_->setObjectName(QStringLiteral("registers_dock"));
@@ -633,11 +937,15 @@ void MainWindow::createDocks() {
     ioDock_->setWidget(ioPanel_);
     addDockWidget(Qt::BottomDockWidgetArea, ioDock_);
 
-    errorDock_ = new QDockWidget(QStringLiteral("Error Console"), this);
-    errorDock_->setObjectName(QStringLiteral("error_dock"));
-    errorConsole_ = new QPlainTextEdit(errorDock_);
+    errorDock_ = new QDockWidget(QStringLiteral("Problems"), this);
+    errorDock_->setObjectName(QStringLiteral("problems_dock"));
+    auto* diagnosticsTabs = new QTabWidget(errorDock_);
+    problemsPanel_ = new Core85::Gui::ProblemsPanel(diagnosticsTabs);
+    errorConsole_ = new QPlainTextEdit(diagnosticsTabs);
     errorConsole_->setReadOnly(true);
-    errorDock_->setWidget(errorConsole_);
+    diagnosticsTabs->addTab(problemsPanel_, QStringLiteral("Problems"));
+    diagnosticsTabs->addTab(errorConsole_, QStringLiteral("Console"));
+    errorDock_->setWidget(diagnosticsTabs);
     addDockWidget(Qt::BottomDockWidgetArea, errorDock_);
     tabifyDockWidget(ioDock_, errorDock_);
 
@@ -648,6 +956,31 @@ void MainWindow::createDocks() {
         viewMenu_->addAction(ioDock_->toggleViewAction());
         viewMenu_->addAction(errorDock_->toggleViewAction());
     }
+
+    connect(openFolderButton, &QPushButton::clicked, this, &MainWindow::openWorkspaceFolder);
+    connect(welcomePage_, &Core85::Gui::WelcomePage::newFileRequested, this, &MainWindow::newAssemblyFile);
+    connect(welcomePage_, &Core85::Gui::WelcomePage::openFilesRequested, this, &MainWindow::openSourceFile);
+    connect(welcomePage_, &Core85::Gui::WelcomePage::openFolderRequested, this, &MainWindow::openWorkspaceFolder);
+    connect(welcomePage_, &Core85::Gui::WelcomePage::openSampleRequested, this, &MainWindow::openSampleProgram);
+    connect(findReplaceBar_,
+            &Core85::Gui::FindReplaceBar::findNextRequested,
+            this,
+            &MainWindow::findNext);
+    connect(findReplaceBar_,
+            &Core85::Gui::FindReplaceBar::findPreviousRequested,
+            this,
+            &MainWindow::findPrevious);
+    connect(findReplaceBar_,
+            &Core85::Gui::FindReplaceBar::replaceOneRequested,
+            this,
+            &MainWindow::replaceOne);
+    connect(findReplaceBar_,
+            &Core85::Gui::FindReplaceBar::replaceAllRequested,
+            this,
+            &MainWindow::replaceAll);
+    connect(findReplaceBar_, &Core85::Gui::FindReplaceBar::goToLineRequested, this, &MainWindow::goToLine);
+    connect(findReplaceBar_, &Core85::Gui::FindReplaceBar::closeRequested, this, &MainWindow::hideFindBar);
+    connect(problemsPanel_, &Core85::Gui::ProblemsPanel::problemActivated, this, &MainWindow::handleProblemActivated);
 }
 
 void MainWindow::wireController() {
@@ -699,6 +1032,10 @@ void MainWindow::wireController() {
     connect(explorerTree_, &QTreeView::doubleClicked, this, &MainWindow::handleExplorerActivated);
     connect(editorTabs_, &QTabWidget::currentChanged, this, &MainWindow::handleCurrentTabChanged);
     connect(editorTabs_, &QTabWidget::tabCloseRequested, this, &MainWindow::handleTabCloseRequested);
+    connect(editorTabs_->tabBar(),
+            &QTabBar::customContextMenuRequested,
+            this,
+            &MainWindow::showTabContextMenu);
 
     emulatorThread_.setObjectName(QStringLiteral("Core85EmulatorThread"));
     emulatorThread_.start();
@@ -715,13 +1052,42 @@ void MainWindow::refreshStatusBar() {
         cyclesStatusLabel_->setText(QStringLiteral("T-States: 0"));
     }
 
-    stateStatusLabel_->setText(
-        QStringLiteral("State: %1").arg(Core85::Gui::executionStateToString(executionState_)));
+    QString stateText = Core85::Gui::executionStateToString(executionState_);
+    if (!hasLoadedProgram_) {
+        stateText = QStringLiteral("No Program Loaded");
+    }
+    stateStatusLabel_->setText(QStringLiteral("State: %1").arg(stateText));
+    updateExecutionActions();
     updateWindowTitle();
 }
 
+void MainWindow::updateExecutionActions() {
+    const bool hasEditor = currentEditor() != nullptr;
+    const bool running = executionState_ == Core85::Gui::ExecutionState::Running;
+    const bool loaded = hasLoadedProgram_;
+
+    if (assembleAction_ != nullptr) {
+        assembleAction_->setEnabled(hasEditor && !running);
+    }
+    if (runAction_ != nullptr) {
+        runAction_->setEnabled(loaded && !running);
+    }
+    if (pauseAction_ != nullptr) {
+        pauseAction_->setEnabled(running);
+    }
+    if (stepIntoAction_ != nullptr) {
+        stepIntoAction_->setEnabled(loaded && !running);
+    }
+    if (stepOverAction_ != nullptr) {
+        stepOverAction_->setEnabled(loaded && !running);
+    }
+    if (resetAction_ != nullptr) {
+        resetAction_->setEnabled(loaded && !running);
+    }
+}
+
 void MainWindow::clearAssemblerErrors() {
-    errorConsole_->clear();
+    problemsPanel_->clearProblems();
     for (int index = 0; index < editorTabs_->count(); ++index) {
         if (auto* editor = editorAt(index)) {
             editor->clearProblemMarkers();
@@ -743,14 +1109,16 @@ void MainWindow::showAssemblerErrors(const std::vector<Core85::AssemblerError>& 
         return;
     }
 
-    for (const auto& error : errors) {
-        errorConsole_->appendPlainText(errorToString(error));
-    }
+    problemsPanel_->setProblems(errors);
+    errorDock_->show();
+    errorDock_->raise();
 
     if (auto* editor = currentEditor()) {
         const auto& first = errors.front();
         editor->setErrorLine(static_cast<int>(first.line), QString::fromStdString(first.message));
-        messageStatusLabel_->setText(errorToString(first));
+        editor->goToLine(static_cast<int>(first.line));
+        messageStatusLabel_->setText(
+            QStringLiteral("Assembly failed at line %1").arg(first.line));
     }
 }
 
@@ -789,6 +1157,8 @@ void MainWindow::updateWindowTitle() {
     QString title = QStringLiteral("Core85");
     if (!currentFilePath_.isEmpty()) {
         title += QStringLiteral(" - %1").arg(QFileInfo(currentFilePath_).fileName());
+    } else if (editorTabs_->count() > 0 && currentEditor() != nullptr) {
+        title += QStringLiteral(" - %1").arg(editorDisplayName(currentEditor()));
     }
     if (!workspaceRootPath_.isEmpty()) {
         title += QStringLiteral(" [%1]").arg(QFileInfo(workspaceRootPath_).fileName());
@@ -815,6 +1185,17 @@ void MainWindow::refreshActionIcons() {
     }
 }
 
+void MainWindow::setWelcomeVisible(bool visible) {
+    if (centerStack_ == nullptr) {
+        return;
+    }
+
+    centerStack_->setCurrentIndex(visible ? 0 : 1);
+    if (!visible && currentEditor() != nullptr) {
+        currentEditor()->setFocus();
+    }
+}
+
 bool MainWindow::saveSourceToPath(const QString& path) {
     return saveEditorToPath(currentEditor(), path);
 }
@@ -836,6 +1217,7 @@ bool MainWindow::saveEditorToPath(Core85::Gui::CodeEditor* editor, const QString
     setEditorFilePath(editor, path);
     editor->document()->setModified(false);
     updateTabTitle(editor);
+    recordRecentFile(path);
 
     if (editor == currentEditor()) {
         setCurrentFilePath(path);
@@ -876,8 +1258,7 @@ bool MainWindow::maybeSaveEditor(Core85::Gui::CodeEditor* editor) {
     const QMessageBox::StandardButton button = QMessageBox::question(
         this,
         QStringLiteral("Unsaved Changes"),
-        QStringLiteral("Save changes to %1?")
-            .arg(editorDisplayName(editor)),
+        QStringLiteral("Save changes to %1?").arg(editorDisplayName(editor)),
         QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel,
         QMessageBox::Save);
 
@@ -902,11 +1283,14 @@ bool MainWindow::maybeSaveAllEditors() {
     return true;
 }
 
-void MainWindow::openTextFileInTab(const QString& path) {
+void MainWindow::openTextFileInTab(const QString& path, bool activate) {
     const QString absolutePath = QFileInfo(path).absoluteFilePath();
     const int existingIndex = findEditorTabByPath(absolutePath);
     if (existingIndex >= 0) {
-        editorTabs_->setCurrentIndex(existingIndex);
+        if (activate) {
+            editorTabs_->setCurrentIndex(existingIndex);
+        }
+        setWelcomeVisible(false);
         return;
     }
 
@@ -921,6 +1305,14 @@ void MainWindow::openTextFileInTab(const QString& path) {
     editor->setPlainText(stream.readAll());
     editor->document()->setModified(false);
     setEditorFilePath(editor, absolutePath);
+    createEditorTab(editor, activate);
+    recordRecentFile(absolutePath);
+}
+
+void MainWindow::createEditorTab(Core85::Gui::CodeEditor* editor, bool activate) {
+    if (editor == nullptr) {
+        return;
+    }
 
     connect(editor, &Core85::Gui::CodeEditor::breakpointToggled, this, &MainWindow::handleBreakpointToggled);
     connect(editor->document(),
@@ -929,13 +1321,14 @@ void MainWindow::openTextFileInTab(const QString& path) {
             &MainWindow::handleEditorModificationChanged);
 
     const int tabIndex = editorTabs_->addTab(editor, editorDisplayName(editor));
-    editorTabs_->setTabToolTip(tabIndex, absolutePath);
-    editorTabs_->setCurrentIndex(tabIndex);
-    updateTabTitle(editor);
-
-    if (workspaceRootPath_.isEmpty()) {
-        setWorkspaceRoot(QFileInfo(absolutePath).absolutePath());
+    editorTabs_->setTabToolTip(tabIndex,
+                               editorFilePath(editor).isEmpty() ? editorDisplayName(editor)
+                                                                : editorFilePath(editor));
+    if (activate) {
+        editorTabs_->setCurrentIndex(tabIndex);
     }
+    updateTabTitle(editor);
+    setWelcomeVisible(false);
 }
 
 void MainWindow::loadHexFromPath(const QString& path) {
@@ -959,12 +1352,14 @@ void MainWindow::loadHexFromPath(const QString& path) {
     }
 
     loadedEditor_ = nullptr;
+    hasLoadedProgram_ = true;
     addressToLine_.clear();
     lineToAddress_.clear();
     clearAssemblerErrors();
     clearExecutionLineHighlights();
     setCurrentFilePath(path);
     loadProjectMetadataForFile(path);
+    recordRecentFile(path);
 
     QMetaObject::invokeMethod(
         emulatorController_,
@@ -974,13 +1369,14 @@ void MainWindow::loadHexFromPath(const QString& path) {
         Qt::QueuedConnection);
 
     messageStatusLabel_->setText(QStringLiteral("Loaded HEX at %1").arg(Core85::Gui::formatHex16(result.origin)));
+    updateExecutionActions();
 }
 
 void MainWindow::setWorkspaceRoot(const QString& path) {
     workspaceRootPath_ = path;
     if (workspaceRootPath_.isEmpty()) {
         explorerStack_->setCurrentIndex(0);
-        explorerDock_->setWindowTitle(QStringLiteral("Explorer"));
+        explorerDock_->setWindowTitle(QStringLiteral("Workspace"));
         updateWindowTitle();
         return;
     }
@@ -988,24 +1384,17 @@ void MainWindow::setWorkspaceRoot(const QString& path) {
     const QModelIndex rootIndex = fileSystemModel_->setRootPath(path);
     explorerTree_->setRootIndex(rootIndex);
     explorerStack_->setCurrentWidget(explorerTree_);
-    explorerDock_->setWindowTitle(QStringLiteral("Explorer - %1").arg(QFileInfo(path).fileName()));
+    explorerDock_->setWindowTitle(QStringLiteral("Workspace - %1").arg(QFileInfo(path).fileName()));
+    recordRecentFolder(path);
     updateWindowTitle();
 }
 
-void MainWindow::createUntitledTab() {
+void MainWindow::createUntitledTab(const QString& content) {
     auto* editor = new Core85::Gui::CodeEditor(editorTabs_);
     editor->setProperty("untitledName", QStringLiteral("untitled-%1.asm").arg(untitledCounter_++));
-    editor->document()->setModified(false);
-
-    connect(editor, &Core85::Gui::CodeEditor::breakpointToggled, this, &MainWindow::handleBreakpointToggled);
-    connect(editor->document(),
-            &QTextDocument::modificationChanged,
-            this,
-            &MainWindow::handleEditorModificationChanged);
-
-    const int tabIndex = editorTabs_->addTab(editor, editorDisplayName(editor));
-    editorTabs_->setCurrentIndex(tabIndex);
-    updateTabTitle(editor);
+    editor->setPlainText(content);
+    editor->document()->setModified(!content.isEmpty());
+    createEditorTab(editor, true);
 }
 
 int MainWindow::findEditorTabByPath(const QString& path) const {
@@ -1069,8 +1458,11 @@ void MainWindow::updateTabTitle(Core85::Gui::CodeEditor* editor) {
         title.prepend(QStringLiteral("*"));
     }
 
+    const QString tooltip = editorFilePath(editor).isEmpty()
+                                ? QStringLiteral("Unsaved file: %1").arg(editorDisplayName(editor))
+                                : editorFilePath(editor);
     editorTabs_->setTabText(index, title);
-    editorTabs_->setTabToolTip(index, editorFilePath(editor));
+    editorTabs_->setTabToolTip(index, tooltip);
 }
 
 QString MainWindow::projectMetadataPathForFile(const QString& filePath) const {
@@ -1134,11 +1526,18 @@ void MainWindow::applyTheme(const QString& themeName) {
         return;
     }
 
+    if (lightThemeAction_ != nullptr) {
+        lightThemeAction_->setChecked(themeName == QStringLiteral("light"));
+    }
+    if (darkThemeAction_ != nullptr) {
+        darkThemeAction_->setChecked(themeName == QStringLiteral("dark"));
+    }
+
     if (themeName == QStringLiteral("light")) {
         application->setStyleSheet(QStringLiteral(
-            "QMainWindow, QDockWidget, QWidget { background: #F5F7FB; color: #0F172A; }"
+            "QMainWindow, QDockWidget, QWidget { background: #F4F7FB; color: #102033; }"
             "QPlainTextEdit, QTableView, QTableWidget, QTreeView { background: #FFFFFF; color: #111827; gridline-color: #D5DDEA; border: 1px solid #D8E0EB; }"
-            "QHeaderView::section { background: #E9EEF6; color: #0F172A; border: 1px solid #D8E0EB; padding: 4px; }"
+            "QHeaderView::section { background: #E9EEF6; color: #0F172A; border: 1px solid #D8E0EB; padding: 5px; }"
             "QToolBar { background: #E9EEF6; border: 0; spacing: 6px; padding: 6px; }"
             "QDockWidget::title { background: #E9EEF6; color: #0F172A; padding: 8px; font-weight: 600; }"
             "QMenuBar, QMenu { background: #FFFFFF; color: #0F172A; }"
@@ -1154,7 +1553,7 @@ void MainWindow::applyTheme(const QString& themeName) {
         application->setStyleSheet(QStringLiteral(
             "QMainWindow, QDockWidget, QWidget { background: #0B1220; color: #E5EDF8; }"
             "QPlainTextEdit, QTableView, QTableWidget, QTreeView { background: #111A2B; color: #E5EDF8; gridline-color: #2B3A55; border: 1px solid #22304A; }"
-            "QHeaderView::section { background: #172238; color: #E5EDF8; border: 1px solid #2B3A55; padding: 4px; }"
+            "QHeaderView::section { background: #172238; color: #E5EDF8; border: 1px solid #2B3A55; padding: 5px; }"
             "QToolBar { background: #131D31; border: 0; spacing: 6px; padding: 6px; }"
             "QDockWidget::title { background: #131D31; color: #E5EDF8; padding: 8px; font-weight: 600; }"
             "QMenuBar, QMenu { background: #0E1728; color: #E5EDF8; }"
@@ -1174,11 +1573,39 @@ void MainWindow::applyTheme(const QString& themeName) {
 
 void MainWindow::loadSettings() {
     QSettings settings(QStringLiteral("Core85"), QStringLiteral("Core85"));
+
+    currentTheme_ = settings.value(QStringLiteral("appearance/theme"), QStringLiteral("dark")).toString();
+    applyTheme(currentTheme_);
+
+    recentFiles_ = settings.value(QStringLiteral("recent/files")).toStringList();
+    recentFolders_ = settings.value(QStringLiteral("recent/folders")).toStringList();
+
+    const QString workspace = settings.value(QStringLiteral("workspace/root")).toString();
+    if (!workspace.isEmpty() && QFileInfo(workspace).isDir()) {
+        setWorkspaceRoot(workspace);
+    } else {
+        setWorkspaceRoot(QString());
+    }
+
+    const QStringList tabs = settings.value(QStringLiteral("session/openTabs")).toStringList();
+    for (const QString& path : tabs) {
+        if (QFileInfo::exists(path)) {
+            openTextFileInTab(path, false);
+        }
+    }
+
+    const QString currentTabPath = settings.value(QStringLiteral("session/currentTab")).toString();
+    if (!currentTabPath.isEmpty()) {
+        const int index = findEditorTabByPath(currentTabPath);
+        if (index >= 0) {
+            editorTabs_->setCurrentIndex(index);
+        }
+    } else if (editorTabs_->count() > 0) {
+        editorTabs_->setCurrentIndex(0);
+    }
+
     restoreGeometry(settings.value(QStringLiteral("window/geometry")).toByteArray());
     restoreState(settings.value(QStringLiteral("window/state")).toByteArray());
-    setWorkspaceRoot(QString());
-    const QString theme = settings.value(QStringLiteral("appearance/theme"), QStringLiteral("dark")).toString();
-    applyTheme(theme);
 }
 
 void MainWindow::saveSettings() const {
@@ -1187,6 +1614,80 @@ void MainWindow::saveSettings() const {
     settings.setValue(QStringLiteral("window/state"), saveState());
     settings.setValue(QStringLiteral("appearance/theme"), currentTheme_);
     settings.setValue(QStringLiteral("workspace/root"), workspaceRootPath_);
+    settings.setValue(QStringLiteral("recent/files"), recentFiles_);
+    settings.setValue(QStringLiteral("recent/folders"), recentFolders_);
+    settings.setValue(QStringLiteral("session/openTabs"), openTabFilePaths());
+    settings.setValue(QStringLiteral("session/currentTab"), currentEditorFilePath());
+}
+
+void MainWindow::recordRecentFile(const QString& path) {
+    if (path.isEmpty()) {
+        return;
+    }
+
+    recentFiles_.removeAll(path);
+    recentFiles_.prepend(path);
+    while (recentFiles_.size() > 10) {
+        recentFiles_.removeLast();
+    }
+    refreshRecentMenus();
+}
+
+void MainWindow::recordRecentFolder(const QString& path) {
+    if (path.isEmpty()) {
+        return;
+    }
+
+    recentFolders_.removeAll(path);
+    recentFolders_.prepend(path);
+    while (recentFolders_.size() > 10) {
+        recentFolders_.removeLast();
+    }
+    refreshRecentMenus();
+}
+
+void MainWindow::refreshRecentMenus() {
+    if (recentFilesMenu_ == nullptr || recentFoldersMenu_ == nullptr) {
+        return;
+    }
+
+    recentFilesMenu_->clear();
+    for (const QString& path : recentFiles_) {
+        if (!QFileInfo::exists(path)) {
+            continue;
+        }
+        auto* action = recentFilesMenu_->addAction(QFileInfo(path).fileName(), this, &MainWindow::openRecentFile);
+        action->setData(path);
+        action->setToolTip(path);
+    }
+    if (recentFilesMenu_->isEmpty()) {
+        recentFilesMenu_->addAction(QStringLiteral("No recent files"))->setEnabled(false);
+    }
+
+    recentFoldersMenu_->clear();
+    for (const QString& path : recentFolders_) {
+        if (!QFileInfo(path).isDir()) {
+            continue;
+        }
+        auto* action =
+            recentFoldersMenu_->addAction(QFileInfo(path).fileName(), this, &MainWindow::openRecentFolder);
+        action->setData(path);
+        action->setToolTip(path);
+    }
+    if (recentFoldersMenu_->isEmpty()) {
+        recentFoldersMenu_->addAction(QStringLiteral("No recent folders"))->setEnabled(false);
+    }
+}
+
+QStringList MainWindow::openTabFilePaths() const {
+    QStringList paths;
+    for (int index = 0; index < editorTabs_->count(); ++index) {
+        const QString path = editorFilePath(editorAt(index));
+        if (!path.isEmpty()) {
+            paths.append(path);
+        }
+    }
+    return paths;
 }
 
 QSet<QString> MainWindow::diffRegisterFields(const Core85::CPUState& previous,
@@ -1238,4 +1739,20 @@ QList<quint16> MainWindow::currentBreakpointAddresses() const {
         }
     }
     return addresses;
+}
+
+QTextDocument::FindFlags MainWindow::buildFindFlags(bool backward,
+                                                    bool caseSensitive,
+                                                    bool wholeWord) const {
+    QTextDocument::FindFlags flags;
+    if (backward) {
+        flags |= QTextDocument::FindBackward;
+    }
+    if (caseSensitive) {
+        flags |= QTextDocument::FindCaseSensitively;
+    }
+    if (wholeWord) {
+        flags |= QTextDocument::FindWholeWords;
+    }
+    return flags;
 }

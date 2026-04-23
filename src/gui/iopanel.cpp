@@ -160,6 +160,9 @@ IOPanel::IOPanel(QWidget* parent)
       ledPortSpin_(new QSpinBox(this)),
       segmentLeftPortSpin_(new QSpinBox(this)),
       segmentRightPortSpin_(new QSpinBox(this)),
+      inputSummaryLabel_(new QLabel(this)),
+      ledSummaryLabel_(new QLabel(this)),
+      segmentSummaryLabel_(new QLabel(this)),
       inputPorts_(256, 0),
       outputPorts_(256, 0) {
     auto* rootLayout = new QHBoxLayout(this);
@@ -184,6 +187,7 @@ IOPanel::IOPanel(QWidget* parent)
     auto* inputLayout = new QVBoxLayout(inputGroup);
     auto* inputForm = new QFormLayout();
     inputForm->addRow(QStringLiteral("Port"), inputPortSpin_);
+    inputPortSpin_->setToolTip(QStringLiteral("Port number read by the IN instruction for the switch bank."));
     inputLayout->addLayout(inputForm);
     auto* inputBitsLayout = new QGridLayout();
     for (int bit = 7; bit >= 0; --bit) {
@@ -193,12 +197,16 @@ IOPanel::IOPanel(QWidget* parent)
         connect(checkBox, &QCheckBox::toggled, this, &IOPanel::handleInputToggle);
     }
     inputLayout->addLayout(inputBitsLayout);
+    inputSummaryLabel_->setStyleSheet(QStringLiteral("color: palette(mid);"));
+    inputSummaryLabel_->setWordWrap(true);
+    inputLayout->addWidget(inputSummaryLabel_);
     rootLayout->addWidget(inputGroup, 1);
 
     auto* ledGroup = new QGroupBox(QStringLiteral("LED Output"), this);
     auto* ledLayout = new QVBoxLayout(ledGroup);
     auto* ledForm = new QFormLayout();
     ledForm->addRow(QStringLiteral("Port"), ledPortSpin_);
+    ledPortSpin_->setToolTip(QStringLiteral("Port number written by OUT to drive the LED bank."));
     ledLayout->addLayout(ledForm);
     auto* leds = new QGridLayout();
     for (int bit = 7; bit >= 0; --bit) {
@@ -207,6 +215,9 @@ IOPanel::IOPanel(QWidget* parent)
         leds->addWidget(indicator, (7 - bit) / 4, (7 - bit) % 4);
     }
     ledLayout->addLayout(leds);
+    ledSummaryLabel_->setStyleSheet(QStringLiteral("color: palette(mid);"));
+    ledSummaryLabel_->setWordWrap(true);
+    ledLayout->addWidget(ledSummaryLabel_);
     rootLayout->addWidget(ledGroup, 1);
 
     auto* segmentGroup = new QGroupBox(QStringLiteral("2-Digit 7-Segment"), this);
@@ -214,6 +225,8 @@ IOPanel::IOPanel(QWidget* parent)
     auto* segmentForm = new QFormLayout();
     segmentForm->addRow(QStringLiteral("Left Port"), segmentLeftPortSpin_);
     segmentForm->addRow(QStringLiteral("Right Port"), segmentRightPortSpin_);
+    segmentLeftPortSpin_->setToolTip(QStringLiteral("Port that feeds the left seven-segment digit."));
+    segmentRightPortSpin_->setToolTip(QStringLiteral("Port that feeds the right seven-segment digit."));
     segmentLayout->addLayout(segmentForm);
     auto* digitsLayout = new QHBoxLayout();
     segmentLeftDisplay_ = new SevenSegmentDisplay(segmentGroup);
@@ -221,6 +234,9 @@ IOPanel::IOPanel(QWidget* parent)
     digitsLayout->addWidget(segmentLeftDisplay_, 1);
     digitsLayout->addWidget(segmentRightDisplay_, 1);
     segmentLayout->addLayout(digitsLayout, 1);
+    segmentSummaryLabel_->setStyleSheet(QStringLiteral("color: palette(mid);"));
+    segmentSummaryLabel_->setWordWrap(true);
+    segmentLayout->addWidget(segmentSummaryLabel_);
     rootLayout->addWidget(segmentGroup, 1);
 
     connect(inputPortSpin_, qOverload<int>(&QSpinBox::valueChanged), this, &IOPanel::emitProjectMetadata);
@@ -263,6 +279,10 @@ void IOPanel::setPortSnapshots(const QByteArray& inputPorts, const QByteArray& o
 void IOPanel::handleInputToggle() {
     const quint8 port = static_cast<quint8>(inputPortSpin_->value());
     emit inputPortChanged(port, currentInputValue());
+    inputSummaryLabel_->setText(
+        QStringLiteral("Current input: %1 (%2)")
+            .arg(formatHex8(currentInputValue()))
+            .arg(formatBits(currentInputValue())));
 }
 
 void IOPanel::emitProjectMetadata() {
@@ -282,17 +302,42 @@ quint8 IOPanel::currentInputValue() const {
 }
 
 void IOPanel::refreshOutputWidgets() {
+    inputSummaryLabel_->setText(
+        QStringLiteral("Current input: %1 (%2)")
+            .arg(formatHex8(currentInputValue()))
+            .arg(formatBits(currentInputValue())));
+
     const quint8 ledValue = static_cast<quint8>(outputPorts_.at(ledPortSpin_->value()));
     for (int visualIndex = 0; visualIndex < ledIndicators_.size(); ++visualIndex) {
         const int bit = 7 - visualIndex;
         const bool enabled = (ledValue & (1U << bit)) != 0U;
         static_cast<LedIndicator*>(ledIndicators_.at(visualIndex))->setEnabledState(enabled);
     }
+    ledSummaryLabel_->setText(
+        QStringLiteral("LED value: %1 (%2)")
+            .arg(formatHex8(ledValue))
+            .arg(formatBits(ledValue)));
 
     const quint8 leftSegmentValue = static_cast<quint8>(outputPorts_.at(segmentLeftPortSpin_->value()));
     const quint8 rightSegmentValue = static_cast<quint8>(outputPorts_.at(segmentRightPortSpin_->value()));
     segmentLeftDisplay_->setValue(leftSegmentValue);
     segmentRightDisplay_->setValue(rightSegmentValue);
+    segmentSummaryLabel_->setText(
+        QStringLiteral("Left %1  Right %2")
+            .arg(formatHex8(leftSegmentValue))
+            .arg(formatHex8(rightSegmentValue)));
+}
+
+QString IOPanel::formatBits(quint8 value) const {
+    QString bits;
+    bits.reserve(11);
+    for (int bit = 7; bit >= 0; --bit) {
+        if (bit != 7 && ((bit + 1) % 4 == 0)) {
+            bits.append(QLatin1Char(' '));
+        }
+        bits.append((value & (1U << bit)) != 0U ? QLatin1Char('1') : QLatin1Char('0'));
+    }
+    return bits;
 }
 
 }  // namespace Core85::Gui

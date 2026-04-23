@@ -8,6 +8,7 @@
 #include "gui/emulator_types.h"
 
 class QCheckBox;
+class QLabel;
 class QSpinBox;
 class QWidget;
 
@@ -36,11 +37,15 @@ private:
 
     quint8 currentInputValue() const;
     void refreshOutputWidgets();
+    QString formatBits(quint8 value) const;
 
     QSpinBox* inputPortSpin_ = nullptr;
     QSpinBox* ledPortSpin_ = nullptr;
     QSpinBox* segmentLeftPortSpin_ = nullptr;
     QSpinBox* segmentRightPortSpin_ = nullptr;
+    QLabel* inputSummaryLabel_ = nullptr;
+    QLabel* ledSummaryLabel_ = nullptr;
+    QLabel* segmentSummaryLabel_ = nullptr;
     QVector<QCheckBox*> inputBits_{};
     QVector<QWidget*> ledIndicators_{};
     SevenSegmentDisplay* segmentLeftDisplay_ = nullptr;

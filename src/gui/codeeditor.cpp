@@ -96,6 +96,15 @@ protected:
         editor_->lineNumberAreaMousePressEvent(event);
     }
 
+    void mouseMoveEvent(QMouseEvent* event) override {
+        editor_->lineNumberAreaMouseMoveEvent(event);
+    }
+
+    void leaveEvent(QEvent* event) override {
+        Q_UNUSED(event);
+        editor_->lineNumberAreaLeaveEvent();
+    }
+
 private:
     CodeEditor* editor_;
 };
@@ -112,6 +121,8 @@ CodeEditor::CodeEditor(QWidget* parent)
     editorFont.setPointSize(12);
     setFont(editorFont);
     setTabStopDistance(fontMetrics().horizontalAdvance(QLatin1Char(' ')) * 4);
+    lineNumberArea_->setMouseTracking(true);
+    setMouseTracking(true);
 
     connect(this, &QPlainTextEdit::blockCountChanged, this, &CodeEditor::updateLineNumberAreaWidth);
     connect(this, &QPlainTextEdit::updateRequest, this, &CodeEditor::updateLineNumberArea);
@@ -159,6 +170,19 @@ void CodeEditor::lineNumberAreaPaintEvent(QPaintEvent* event) {
                 painter.setBrush(QColor(QStringLiteral("#DC2626")));
                 painter.setPen(Qt::NoPen);
                 painter.drawEllipse(4, top + 3, 8, 8);
+            } else if (hoveredLine_ == lineNumber) {
+                painter.setBrush(darkTheme ? QColor(QStringLiteral("#94A3B8"))
+                                           : QColor(QStringLiteral("#64748B")));
+                painter.setPen(Qt::NoPen);
+                painter.drawEllipse(5, top + 4, 6, 6);
+            }
+
+            if (errorLine_ == lineNumber) {
+                painter.setPen(QPen(QColor(QStringLiteral("#EF4444")), 2));
+                painter.drawLine(lineNumberArea_->width() - 3, top + 2, lineNumberArea_->width() - 3, bottom - 2);
+            } else if (executionLine_ == lineNumber) {
+                painter.setPen(QPen(QColor(QStringLiteral("#F59E0B")), 2));
+                painter.drawLine(lineNumberArea_->width() - 3, top + 2, lineNumberArea_->width() - 3, bottom - 2);
             }
         }
 
@@ -173,6 +197,29 @@ void CodeEditor::lineNumberAreaMousePressEvent(QMouseEvent* event) {
     const int line = lineFromY(event->pos().y());
     if (line > 0) {
         toggleBreakpointForLine(line);
+    }
+}
+
+void CodeEditor::lineNumberAreaMouseMoveEvent(QMouseEvent* event) {
+    const int line = lineFromY(event->pos().y());
+    if (hoveredLine_ == line) {
+        return;
+    }
+
+    hoveredLine_ = line;
+    if (hoveredLine_ > 0) {
+        lineNumberArea_->setToolTip(QStringLiteral("Click gutter to toggle a breakpoint on line %1")
+                                        .arg(hoveredLine_));
+    } else {
+        lineNumberArea_->setToolTip(QString());
+    }
+    lineNumberArea_->update();
+}
+
+void CodeEditor::lineNumberAreaLeaveEvent() {
+    if (hoveredLine_ >= 0) {
+        hoveredLine_ = -1;
+        lineNumberArea_->update();
     }
 }
 
@@ -201,6 +248,22 @@ void CodeEditor::clearProblemMarkers() {
 void CodeEditor::setBreakpointLines(const QSet<int>& breakpoints) {
     breakpoints_ = breakpoints;
     lineNumberArea_->update();
+}
+
+void CodeEditor::goToLine(int line) {
+    if (line <= 0) {
+        return;
+    }
+
+    QTextBlock block = document()->findBlockByNumber(line - 1);
+    if (!block.isValid()) {
+        return;
+    }
+
+    QTextCursor cursor(block);
+    setTextCursor(cursor);
+    centerCursor();
+    setFocus();
 }
 
 void CodeEditor::resizeEvent(QResizeEvent* event) {
@@ -235,7 +298,7 @@ void CodeEditor::refreshExtraSelections() {
     if (!isReadOnly()) {
         QTextEdit::ExtraSelection currentLineSelection;
         currentLineSelection.format.setBackground(
-            darkTheme ? QColor(QStringLiteral("#1E3A5F"))
+            darkTheme ? QColor(QStringLiteral("#213452"))
                       : QColor(QStringLiteral("#EEF4FF")));
         currentLineSelection.format.setProperty(QTextFormat::FullWidthSelection, true);
         currentLineSelection.cursor = textCursor();
@@ -262,10 +325,10 @@ void CodeEditor::refreshExtraSelections() {
     };
 
     addLineSelection(executionLine_,
-                     darkTheme ? QColor(QStringLiteral("#6B5A12"))
+                     darkTheme ? QColor(QStringLiteral("#5E4C14"))
                                : QColor(QStringLiteral("#FEF08A")));
     addLineSelection(errorLine_,
-                     darkTheme ? QColor(QStringLiteral("#7F1D1D"))
+                     darkTheme ? QColor(QStringLiteral("#6A1D1D"))
                                : QColor(QStringLiteral("#FECACA")));
 
     setExtraSelections(selections);

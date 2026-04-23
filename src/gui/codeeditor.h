@@ -17,12 +17,15 @@ public:
     int lineNumberAreaWidth() const;
     void lineNumberAreaPaintEvent(QPaintEvent* event);
     void lineNumberAreaMousePressEvent(QMouseEvent* event);
+    void lineNumberAreaMouseMoveEvent(QMouseEvent* event);
+    void lineNumberAreaLeaveEvent();
 
     QSet<int> breakpointLines() const;
     void setCurrentExecutionLine(int line);
     void setErrorLine(int line, const QString& message);
     void clearProblemMarkers();
     void setBreakpointLines(const QSet<int>& breakpoints);
+    void goToLine(int line);
 
 signals:
     void breakpointToggled(int line, bool enabled);
@@ -43,6 +46,7 @@ private:
     QSet<int> breakpoints_;
     int executionLine_ = -1;
     int errorLine_ = -1;
+    int hoveredLine_ = -1;
     QString errorMessage_;
 };
 

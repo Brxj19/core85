@@ -7,6 +7,8 @@
 #include "core/cpu.h"
 
 class QLabel;
+class QPushButton;
+class QComboBox;
 class QTableWidget;
 
 namespace Core85::Gui {
@@ -26,8 +28,15 @@ signals:
 
 private slots:
     void handleCellChanged(int row, int column);
+    void copySnapshot();
 
 private:
+    enum class DisplayMode {
+        Hex,
+        Decimal,
+        Binary,
+    };
+
     struct RegisterRow {
         QString name;
         quint16 value = 0U;
@@ -38,14 +47,22 @@ private:
     void rebuildRows(const Core85::CPUState& state);
     void updateFlagIndicator(QLabel* label, const QString& name, bool enabled);
     void updateRow(int row, const RegisterRow& data, bool changed);
+    QString primaryValueForRow(const RegisterRow& data) const;
+    QString secondaryValueForRow(const RegisterRow& data) const;
+    QString formatBinary(quint16 value, int bits) const;
 
     QTableWidget* table_ = nullptr;
+    QComboBox* displayModeCombo_ = nullptr;
+    QPushButton* copySnapshotButton_ = nullptr;
+    QLabel* controlStateLabel_ = nullptr;
     QLabel* signFlag_ = nullptr;
     QLabel* zeroFlag_ = nullptr;
     QLabel* auxCarryFlag_ = nullptr;
     QLabel* parityFlag_ = nullptr;
     QLabel* carryFlag_ = nullptr;
     QVector<RegisterRow> rows_{};
+    Core85::CPUState lastState_{};
+    DisplayMode displayMode_ = DisplayMode::Hex;
     bool updating_ = false;
 };
 

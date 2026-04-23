@@ -36,12 +36,15 @@ if(CORE85_BUILD_GUI)
             src/gui/codeeditor.cpp
             src/gui/emulator_types.cpp
             src/gui/emulatorcontroller.cpp
+            src/gui/findreplacebar.cpp
             src/gui/iopanel.cpp
             src/gui/mainwindow.cpp
             src/gui/mainwindow.h
             src/gui/memoryviewer.cpp
+            src/gui/problemspanel.cpp
             src/gui/registerviewer.cpp
             src/gui/value_utils.cpp
+            src/gui/welcomepage.cpp
         )
 
         set_target_properties(core85_gui PROPERTIES
