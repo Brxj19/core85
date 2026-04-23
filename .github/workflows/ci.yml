@@ -63,6 +63,16 @@ jobs:
       - name: Package Smoke Test
         run: cmake --build build --target package --config ${{ matrix.build_type }}
 
+      - name: Verify macOS app bundle
+        if: runner.os == 'macOS'
+        run: |
+          unzip -q build/*.zip -d package-smoke
+          app_path="$(find package-smoke -name core85_gui.app -type d -print -quit)"
+          test -n "$app_path"
+          test -d "$app_path/Contents/Frameworks"
+          otool -L "$app_path/Contents/MacOS/core85_gui" > macos-otool.txt
+          ! grep -E '/opt/homebrew|/usr/local|/Users/' macos-otool.txt
+
       - name: Upload Package Artefacts
         uses: actions/upload-artifact@v7
         with:

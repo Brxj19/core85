@@ -11,17 +11,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(CORE85_BUILD_GUI "Build the Qt GUI application" ON)
 option(CORE85_BUILD_TESTS "Build the GTest test suite" ON)
 
-set(CORE85_QT_DEPLOY_OPTIONS "")
-if(APPLE)
-    foreach(path
-            /opt/homebrew/lib
-            /opt/homebrew/Frameworks
-            /usr/local/lib
-            /usr/local/Frameworks)
-        if(EXISTS "${path}")
-            list(APPEND CORE85_QT_DEPLOY_OPTIONS "-libpath=${path}")
-        endif()
-    endforeach()
+if(APPLE AND "${CMAKE_OSX_DEPLOYMENT_TARGET}" STREQUAL "")
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING
+        "Minimum macOS version supported by Core85" FORCE)
 endif()
 
 set(CORE85_CORE_HEADERS
@@ -71,10 +63,6 @@ install(FILES ${CORE85_CORE_HEADERS}
 set(CORE85_DEPLOY_SCRIPT "")
 
 if(CORE85_BUILD_GUI)
-    if(APPLE)
-        set(QT_INTERNAL_SKIP_DEPLOYMENT ON)
-    endif()
-
     find_package(Qt6 COMPONENTS Widgets QUIET)
 
     if(Qt6_FOUND)
@@ -112,78 +100,16 @@ if(CORE85_BUILD_GUI)
                 core85_lib
         )
 
-        if(APPLE)
-            find_program(CORE85_MACDEPLOYQT_EXECUTABLE
-                NAMES macdeployqt
-                HINTS
-                    "${Qt6_DIR}/../../../bin"
-                    "${Qt6_DIR}/../../../../bin"
-            )
-            find_program(CORE85_QTPATHS_EXECUTABLE
-                NAMES qtpaths6 qtpaths
-                HINTS
-                    "${Qt6_DIR}/../../../bin"
-                    "${Qt6_DIR}/../../../../bin"
-            )
-
-            set(CORE85_QT_PLUGIN_DIR "")
-            if(CORE85_QTPATHS_EXECUTABLE)
-                execute_process(
-                    COMMAND "${CORE85_QTPATHS_EXECUTABLE}" --plugin-dir
-                    OUTPUT_VARIABLE CORE85_QT_PLUGIN_DIR
-                    OUTPUT_STRIP_TRAILING_WHITESPACE
-                )
-            endif()
-
-            set(CORE85_QCOCOA_PLUGIN "")
-            if(CORE85_QT_PLUGIN_DIR)
-                find_file(CORE85_QCOCOA_PLUGIN
-                    NAMES libqcocoa.dylib
-                    PATHS "${CORE85_QT_PLUGIN_DIR}/platforms"
-                    NO_DEFAULT_PATH
-                )
-            endif()
-        endif()
-
         install(TARGETS core85_gui
             BUNDLE DESTINATION .
             RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
         )
 
-        if(APPLE)
-            if(CORE85_MACDEPLOYQT_EXECUTABLE AND CORE85_QCOCOA_PLUGIN)
-                set(CORE85_DEPLOY_SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/core85_deploy.cmake")
-                set(CORE85_DEPLOY_TOOL_COMMAND
-                    "execute_process(\n"
-                    "    COMMAND \"${CORE85_MACDEPLOYQT_EXECUTABLE}\" \"core85_gui.app\" \"-no-plugins\" \"-always-overwrite\"")
-                foreach(option IN LISTS CORE85_QT_DEPLOY_OPTIONS)
-                    string(APPEND CORE85_DEPLOY_TOOL_COMMAND " \"${option}\"")
-                endforeach()
-                string(APPEND CORE85_DEPLOY_TOOL_COMMAND
-                    "\n    WORKING_DIRECTORY \"\${CMAKE_INSTALL_PREFIX}\"\n"
-                    "    COMMAND_ERROR_IS_FATAL ANY\n"
-                    ")\n")
-
-                file(GENERATE OUTPUT "${CORE85_DEPLOY_SCRIPT}" CONTENT
-"${CORE85_DEPLOY_TOOL_COMMAND}
-file(MAKE_DIRECTORY \"\${CMAKE_INSTALL_PREFIX}/core85_gui.app/Contents/PlugIns/platforms\")
-file(COPY \"${CORE85_QCOCOA_PLUGIN}\"
-     DESTINATION \"\${CMAKE_INSTALL_PREFIX}/core85_gui.app/Contents/PlugIns/platforms\")
-")
-            else()
-                qt_generate_deploy_app_script(
-                    TARGET core85_gui
-                    OUTPUT_SCRIPT CORE85_DEPLOY_SCRIPT
-                    NO_UNSUPPORTED_PLATFORM_ERROR
-                )
-            endif()
-        else()
-            qt_generate_deploy_app_script(
-                TARGET core85_gui
-                OUTPUT_SCRIPT CORE85_DEPLOY_SCRIPT
-                NO_UNSUPPORTED_PLATFORM_ERROR
-            )
-        endif()
+        qt_generate_deploy_app_script(
+            TARGET core85_gui
+            OUTPUT_SCRIPT CORE85_DEPLOY_SCRIPT
+            NO_UNSUPPORTED_PLATFORM_ERROR
+        )
 
         add_custom_target(run
             COMMAND $<TARGET_FILE:core85_gui>
